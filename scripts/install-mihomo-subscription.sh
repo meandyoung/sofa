@@ -17,6 +17,14 @@ info() { echo "[INFO] $*"; }
 [[ $# -eq 0 ]] || fail "用法：bash $0（无需参数）"
 [[ -s "$PROXIES" ]] || fail "缺少 $PROXIES；请先部署节点并生成 Mihomo proxies 文件。"
 [[ "$PORT" =~ ^[0-9]+$ ]] && (( PORT >= 1024 && PORT <= 65535 )) || fail '端口必须在 1024–65535 范围内。'
+# 如果缺少 setfacl，自动安装 acl 软件包
+if ! command -v setfacl >/dev/null 2>&1; then
+  info "正在安装 acl 软件包..."
+  apt-get update -qq
+  DEBIAN_FRONTEND=noninteractive apt-get install -y acl
+fi
+
+# 检查依赖
 for cmd in nginx python3 openssl curl setfacl systemctl journalctl getent; do
   command -v "$cmd" >/dev/null || fail "缺少依赖：$cmd"
 done
