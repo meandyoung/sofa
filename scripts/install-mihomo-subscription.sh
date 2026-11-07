@@ -156,6 +156,12 @@ nginx -t || fail 'Nginx 配置检查失败，请检查端口及配置冲突。'
 systemctl daemon-reload
 systemctl reload nginx || systemctl restart nginx
 systemctl enable --now update-quicktunnel.timer
+# ---------- 自动配置 UFW 防火墙 ----------
+
+# 如果安装了 UFW，则放行 HTTP 订阅端口
+if command -v ufw >/dev/null 2>&1; then
+  ufw allow "${PORT}/tcp" comment 'Mihomo HTTP Subscription'
+fi
 STATUS=$(curl --noproxy '*' -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${PORT}/subscribe/${TOKEN}" || true)
 [[ "$STATUS" == 200 ]] || fail "订阅 URL 本地检查失败（HTTP $STATUS）。"
 IP=$(hostname -I | awk '{print $1}')
