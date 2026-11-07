@@ -167,4 +167,4 @@ STATUS=$(curl --noproxy '*' -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:
 IP=$(hostname -I | awk '{print $1}')
 info '安装完成。HTTP 订阅包含敏感凭据，请勿公开分享 URL：'
 printf 'http://%s:%s/subscribe/%s\n' "${IP:-VPS_IP}" "$PORT" "$TOKEN"
-info '如使用防火墙，请自行放行相应 TCP 端口。'
+info '已自动配置 UFW 放行规则；如使用云平台防火墙，请确认相应 TCP 端口已放行。'
