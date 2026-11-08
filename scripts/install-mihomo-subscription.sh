@@ -57,108 +57,57 @@ setfacl -m u:www-data:r-- "$PROXIES"
 # ========== 04. 生成 Quick Tunnel 域名更新脚本 ==========
 # 运行安装器时，将其写入 /etc/sing-box/scripts/update-quicktunnel.sh。
 cat > "$SCRIPT_DIR/update-quicktunnel.sh" <<'UPDATER'
-
 #!/usr/bin/env bash
-
 set -euo pipefail
-
 SUB="/etc/sing-box/subscribe/proxies"
-
 # 查找 Quick Tunnel 进程 PID
-
 PID=$(ps -eo pid,args | awk '/[c]loudflared/ && /--url http:\/\/127\.0\.0\.1:57862/ {print $1; exit}')
-
 [ -n "$PID" ] || { echo "Quick Tunnel process not found"; exit 1; }
-
 # 根据 PID 动态获取 Metrics 监听地址
-
 METRICS=$(ss -lntp | awk -v pid="pid=$PID," 'index($0,pid) {print $4; exit}')
-
 [ -n "$METRICS" ] || { echo "Metrics address not found"; exit 1; }
-
 # 获取 Quick Tunnel 域名
-
 DOMAIN=$(curl -fsS --max-time 5 "http://$METRICS/quicktunnel" |
-
     python3 -c 'import json,sys; print(json.load(sys.stdin)["hostname"])')
-
 # 验证域名格式
-
 [[ "$DOMAIN" =~ ^[a-zA-Z0-9-]+\.trycloudflare\.com$ ]] || {
-
     echo "Invalid Quick Tunnel domain: $DOMAIN"
-
     exit 1
-
 }
-
 # 更新订阅文件中的 VLESS-WS 域名
-
 DOMAIN="$DOMAIN" SUB="$SUB" python3 - <<'PY'
-
 import os
-
 import re
-
 import tempfile
-
 from pathlib import Path
-
 path = Path(os.environ["SUB"])
-
 domain = os.environ["DOMAIN"]
-
 content = path.read_text()
-
 # 仅匹配 Quick Tunnel 域名，不修改 Reality 和 Hysteria2
-
 pattern = r'(?m)^(\s*)(servername:|Host:)\s*([a-zA-Z0-9-]+\.trycloudflare\.com)\s*$'
-
 updated, count = re.subn(
-
     pattern,
-
     lambda m: f"{m.group(1)}{m.group(2)} {domain}",
-
     content
-
 )
-
 if count != 2:
-
     raise SystemExit(f"Expected 2 domain fields, found {count}")
-
 # 仅在域名变化时更新文件
-
 if updated != content:
-
     with tempfile.NamedTemporaryFile(
-
         mode="w",
-
         dir=path.parent,
-
         delete=False
-
     ) as f:
-
         f.write(updated)
-
         tmp = f.name
-
     os.chmod(tmp, 0o600)
-
     os.replace(tmp, path)
     os.system(f"setfacl -m u:www-data:r-- {path}")
-
     print(f"Updated Quick Tunnel domain: {domain}")
-
 else:
-
     print(f"Domain unchanged: {domain}")
-
 PY
-
 UPDATER
 chmod 700 "$SCRIPT_DIR/update-quicktunnel.sh"
 bash -n "$SCRIPT_DIR/update-quicktunnel.sh"
