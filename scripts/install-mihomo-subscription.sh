@@ -84,10 +84,10 @@ path = Path(os.environ["SUB"])
 domain = os.environ["DOMAIN"]
 content = path.read_text()
 # 仅匹配 Quick Tunnel 域名，不修改 Reality 和 Hysteria2
-pattern = r'(?m)^(\s*)(servername:|Host:)\s*([a-zA-Z0-9-]+\.trycloudflare\.com)\s*$'
+pattern = r'(?m)^(\s*)(servername:|Host:)\s*"?([a-zA-Z0-9-]+\.trycloudflare\.com)"?\s*$'
 updated, count = re.subn(
     pattern,
-    lambda m: f"{m.group(1)}{m.group(2)} {domain}",
+    lambda m: f'{m.group(1)}{m.group(2)} "{domain}"',
     content
 )
 if count != 2:
