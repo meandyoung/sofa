@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Ubuntu 22.04/24.04 | 一键部署 Reality / Hysteria2 / VLESS-WS Quick Tunnel
+# 注意：节点生成形式需要独立成行，因为quicktunnel更新脚本查找是按照这个格式寻找的
 # 安装完成后生成 /etc/sing-box/subscribe/proxies，供独立 Mihomo 订阅安装器直接使用。
 set -Eeuo pipefail
 export DEBIAN_FRONTEND=noninteractive
