@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Ubuntu 22.04/24.04 | 一键部署 Reality / Hysteria2 / VLESS-WS Quick Tunnel
+# Ubuntu 22.04/24.04 | 一键部署 Reality / Hysteria2 / VLESS-WS Quick Tunnel / AnyTLS / ShadowTLS v3
 # 注意：节点生成形式需要独立成行，因为quicktunnel更新脚本查找是按照这个格式寻找的
 # 安装完成后生成 /etc/sing-box/subscribe/proxies，供独立 Mihomo 订阅安装器直接使用。
 set -Eeuo pipefail
@@ -8,6 +8,9 @@ BASE=/etc/sing-box
 PROXIES="$BASE/subscribe/proxies"
 REALITY_PORT=443
 HY2_PORT=8443
+ANYTLS_PORT=8444
+SHADOWTLS_PORT=8446
+SHADOWTLS_SS_PORT=10081
 WS_PORT=10080
 NGINX_WS_PORT=57862
 CF_METRICS_PORT=20241
@@ -21,7 +24,7 @@ info(){ echo "[INFO] $*"; }
 [[ $ID == ubuntu ]] || fail '目前仅支持 Ubuntu'
 [[ $VERSION_ID == 22.04 || $VERSION_ID == 24.04 ]] || fail '仅支持 Ubuntu 22.04/24.04'
 [[ ! -e "$BASE/config.json" && ! -e "$PROXIES" ]] || fail '检测到已有节点配置；为避免覆盖，脚本已停止。'
-for p in "$REALITY_PORT/tcp" "$HY2_PORT/udp" "$NGINX_WS_PORT/tcp"; do
+for p in "$REALITY_PORT/tcp" "$HY2_PORT/udp" "$ANYTLS_PORT/tcp" "$SHADOWTLS_PORT/tcp" "$SHADOWTLS_SS_PORT/tcp" "$NGINX_WS_PORT/tcp"; do
   port=${p%/*}; proto=${p#*/}
   if ss -H -lntup | grep -Eq ":${port}[[:space:]]"; then
     fail "端口 $port 可能已被占用，请检查现有服务"
@@ -55,6 +58,9 @@ public_key=$(printf '%s\n' "$keys" | awk -F': ' '/PublicKey|Public key/{print $2
 [[ -n $private_key && -n $public_key ]] || fail 'Reality 密钥生成失败'
 short_id=$(openssl rand -hex 8)
 hy_password=$(openssl rand -hex 24)
+anytls_password=$(openssl rand -hex 24)
+shadowtls_password=$(openssl rand -hex 24)
+ss2022_password=$(openssl rand -base64 32 | tr -d '\n')
 # HY2 自签名证书使用 SNI www.apple.com，并固定 SHA-256 指纹验证。
 public_ip=$(curl -fsS --max-time 10 -4 https://api.ipify.org) || fail '无法识别公网 IPv4'
 [[ $public_ip =~ ^[0-9.]+$ ]] || fail '公网 IP 格式异常'
@@ -65,24 +71,27 @@ chmod 600 "$BASE/certs/hy2.key"
 chmod 644 "$BASE/certs/hy2.crt"
 hy_fingerprint=$(openssl x509 -in "$BASE/certs/hy2.crt" -noout -fingerprint -sha256 | cut -d= -f2)
 # 保存生成的 Reality 密钥及节点凭据，供后续管理和备份；服务端配置仍需引用其中的私钥。
-python3 - "$BASE/certs/node-secrets.json" "$private_key" "$public_key" "$short_id" "$uuid" "$ws_uuid" "$hy_password" <<'PYSECRETS'
+python3 - "$BASE/certs/node-secrets.json" "$private_key" "$public_key" "$short_id" "$uuid" "$ws_uuid" "$hy_password" "$anytls_password" "$shadowtls_password" "$ss2022_password" <<'PYSECRETS'
 import json,sys
-p,private,public,short,uuid,ws_uuid,hy_password=sys.argv[1:]
+p,private,public,short,uuid,ws_uuid,hy_password,anytls_password,shadowtls_password,ss2022_password=sys.argv[1:]
 with open(p,"w") as f:
- json.dump({"reality_private_key":private,"reality_public_key":public,"reality_short_id":short,"reality_uuid":uuid,"ws_uuid":ws_uuid,"hysteria2_password":hy_password},f,indent=2)
+ json.dump({"reality_private_key":private,"reality_public_key":public,"reality_short_id":short,"reality_uuid":uuid,"ws_uuid":ws_uuid,"hysteria2_password":hy_password,"anytls_password":anytls_password,"shadowtls_password":shadowtls_password,"shadowsocks2022_password":ss2022_password},f,indent=2)
  f.write("\n")
 PYSECRETS
 chmod 600 "$BASE/certs/node-secrets.json"
 # ============================================================
-# sing-box 模块：生成三个 inbound 及直连 outbound 的 JSON 配置
+# sing-box 模块：生成五个代理节点（ShadowTLS 含本地 SS inbound）及直连 outbound
 # ============================================================
-python3 - "$BASE/config.json" "$uuid" "$ws_uuid" "$private_key" "$short_id" "$hy_password" "$WS_PATH" "$REALITY_SNI" "$WS_PORT" "$HY2_PORT" "$REALITY_PORT" <<'PY'
+python3 - "$BASE/config.json" "$uuid" "$ws_uuid" "$private_key" "$short_id" "$hy_password" "$WS_PATH" "$REALITY_SNI" "$WS_PORT" "$HY2_PORT" "$REALITY_PORT" "$ANYTLS_PORT" "$SHADOWTLS_PORT" "$SHADOWTLS_SS_PORT" "$anytls_password" "$shadowtls_password" "$ss2022_password" <<'PY'
 import json,sys
-p,uuid,ws_uuid,private,short,pwd,path,sni,wsport,hyport,realityport=sys.argv[1:]
+p,uuid,ws_uuid,private,short,pwd,path,sni,wsport,hyport,realityport,anyport,shadowport,ssport,anypwd,shadowpwd,sspwd=sys.argv[1:]
 config={"log":{"level":"info","timestamp":True},"inbounds":[
  {"type":"vless","tag":"reality-in","listen":"::","listen_port":int(realityport),"users":[{"uuid":uuid,"flow":"xtls-rprx-vision"}],"tls":{"enabled":True,"server_name":sni,"reality":{"enabled":True,"handshake":{"server":sni,"server_port":443},"private_key":private,"short_id":[short]}}},
  {"type":"hysteria2","tag":"hy2-in","listen":"::","listen_port":int(hyport),"users":[{"password":pwd}],"tls":{"enabled":True,"certificate_path":"/etc/sing-box/certs/hy2.crt","key_path":"/etc/sing-box/certs/hy2.key"}},
- {"type":"vless","tag":"ws-in","listen":"127.0.0.1","listen_port":int(wsport),"users":[{"uuid":ws_uuid}],"transport":{"type":"ws","path":path,"max_early_data":2560,"early_data_header_name":"Sec-WebSocket-Protocol"},"multiplex":{"enabled":True}}
+ {"type":"vless","tag":"ws-in","listen":"127.0.0.1","listen_port":int(wsport),"users":[{"uuid":ws_uuid}],"transport":{"type":"ws","path":path,"max_early_data":2560,"early_data_header_name":"Sec-WebSocket-Protocol"},"multiplex":{"enabled":True}},
+ {"type":"anytls","tag":"anytls-in","listen":"::","listen_port":int(anyport),"users":[{"password":anypwd}],"tls":{"enabled":True,"certificate_path":"/etc/sing-box/certs/hy2.crt","key_path":"/etc/sing-box/certs/hy2.key"}},
+ {"type":"shadowtls","tag":"shadowtls-in","listen":"::","listen_port":int(shadowport),"version":3,"users":[{"name":"client","password":shadowpwd}],"handshake":{"server":sni,"server_port":443},"detour":"shadowtls-ss-in","strict_mode":True},
+ {"type":"shadowsocks","tag":"shadowtls-ss-in","listen":"127.0.0.1","listen_port":int(ssport),"method":"2022-blake3-aes-256-gcm","password":sspwd}
 ],"outbounds":[{"type":"direct","tag":"direct"}]}
 with open(p,'w') as f:json.dump(config,f,indent=2)
 PY
@@ -149,6 +158,8 @@ nginx -t || fail 'Nginx 配置校验失败'
 # 保留现有 SSH 规则；如果 UFW 尚未启用，仅添加规则，不擅自启用防火墙。
 ufw allow "${REALITY_PORT}/tcp" comment 'sing-box Reality'
 ufw allow "${HY2_PORT}/udp" comment 'sing-box Hysteria2'
+ufw allow "${ANYTLS_PORT}/tcp" comment 'sing-box AnyTLS'
+ufw allow "${SHADOWTLS_PORT}/tcp" comment 'sing-box ShadowTLS'
 info 'UFW 入站规则已配置；如 UFW 为 inactive，请按实际需要另行启用。'
 
 # ============================================================
@@ -172,15 +183,17 @@ for i in $(seq 1 25); do
   sleep 2
 done
 # ============================================================
-# Mihomo 节点模块：将三个节点统一输出为多行 YAML
+# Mihomo 节点模块：将五个节点统一输出为多行 YAML
 # ============================================================
-python3 - "$PROXIES" "$public_ip" "$uuid" "$ws_uuid" "$public_key" "$short_id" "$hy_password" "$domain" "$REALITY_SNI" "$WS_PATH" "$REALITY_PORT" "$HY2_PORT" "$hy_fingerprint" <<'PY'
+python3 - "$PROXIES" "$public_ip" "$uuid" "$ws_uuid" "$public_key" "$short_id" "$hy_password" "$domain" "$REALITY_SNI" "$WS_PATH" "$REALITY_PORT" "$HY2_PORT" "$hy_fingerprint" "$ANYTLS_PORT" "$SHADOWTLS_PORT" "$anytls_password" "$shadowtls_password" "$ss2022_password" <<'PY'
 import json,sys
-p,ip,uuid,ws_uuid,pub,short,pwd,domain,sni,path,rport,hport,hyfp=sys.argv[1:]
+p,ip,uuid,ws_uuid,pub,short,pwd,domain,sni,path,rport,hport,hyfp,anyport,shadowport,anypwd,shadowpwd,sspwd=sys.argv[1:]
 # 统一生成块式（多行）YAML；兼容 Mihomo 及现有域名更新器。
 entries=[
  {"name":"vultr-reality","type":"vless","server":ip,"port":int(rport),"uuid":uuid,"network":"tcp","tls":True,"udp":True,"servername":sni,"client-fingerprint":"chrome","flow":"xtls-rprx-vision","reality-opts":{"public-key":pub,"short-id":short}},
  {"name":"vultr-hysteria2","type":"hysteria2","server":ip,"port":int(hport),"password":pwd,"sni":sni,"skip-cert-verify":False,"fingerprint":hyfp},
+ {"name":"vultr-anytls","type":"anytls","server":ip,"port":int(anyport),"password":anypwd,"sni":sni,"skip-cert-verify":False,"fingerprint":hyfp,"client-fingerprint":"chrome"},
+ {"name":"vultr-shadowtls","type":"ss","server":ip,"port":int(shadowport),"cipher":"2022-blake3-aes-256-gcm","password":sspwd,"plugin":"shadow-tls","plugin-opts":{"version":3,"host":sni,"password":shadowpwd}},
  {"name":"vultr-vless-ws-tls","type":"vless","server":"skk.moe","port":443,"uuid":ws_uuid,"udp":True,"tls":True,"servername":domain,"network":"ws","skip-cert-verify":False,"ws-opts":{"path":path,"headers":{"Host":domain},"max-early-data":2560,"early-data-header-name":"Sec-WebSocket-Protocol"},"smux":{"enabled":True,"protocol":"h2mux","padding":True,"max-connections":8,"min-streams":16,"statistic":True,"only-tcp":False}}
 ]
 
@@ -206,12 +219,12 @@ with open(p,'w',encoding='utf-8') as f:
         emit_map(f,dict(rest),4)
 PY
 chmod 600 "$PROXIES"
-info "三个节点配置已生成：$PROXIES"
+info "五个节点配置已生成：$PROXIES"
 info "sing-box 配置：$BASE/config.json"
 info "证书与密钥目录：$BASE/certs"
 info "Quick Tunnel 域名：$domain"
 if [[ $domain == PENDING.trycloudflare.com ]]; then
   info '域名暂未获取；WS 节点不可用，等待 cloudflared 运行后再更新。'
 fi
-info 'UFW 已添加 TCP 443、UDP 8443 规则；仍需确认 UFW 状态及云平台防火墙。HTTP 订阅端口由另一安装器配置。'
+info 'UFW 已添加 TCP 443、8444、8446 及 UDP 8443 规则；仍需确认 UFW 状态及云平台防火墙。HTTP 订阅端口由另一安装器配置。'
 info 'HY2 使用自签名证书和 SHA-256 指纹校验；证书更新时需同步更新 fingerprint。'
