@@ -81,3 +81,17 @@ grep -E '^  - name:' /etc/sing-box/subscribe/proxies
 - Quick Tunnel 域名可能改变，依赖后续订阅模块自动同步。
 - 脚本下载最新 sing-box/cloudflared，尚未锁定版本或校验 release 文件哈希。
 - 已有部署不应重新运行安装器；这次新增的 UFW 规则已在当前 VPS 手动应用，后续新 VPS 会自动添加。
+
+## 8. 一次安装两个模块（推荐）
+
+全新 Ubuntu VPS 可以使用 `scripts/install-all.sh` 一次完成五节点和 Mihomo HTTP 订阅部署。它会先下载两个安装器并分别通过 Bash 语法检查，再按顺序执行；任何一步失败都会停止后续安装。
+
+```bash
+# 下载统一安装器
+curl -fsSL https://raw.githubusercontent.com/meandyoung/sofa/main/scripts/install-all.sh -o /root/install-all.sh
+
+# 检查统一安装器语法，成功后执行
+bash -n /root/install-all.sh && bash /root/install-all.sh
+```
+
+该脚本仅用于全新安装；检测到已有 sing-box 配置或订阅文件时会停止，不会覆盖现有节点。也可以继续分别运行两个原安装器。
