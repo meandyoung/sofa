@@ -18,9 +18,9 @@
     └── proxies                # 必须预先生成，非空，Mihomo YAML 格式
 ```
 
-`proxies` 顶层必须是 `proxies:`，其中包含 Reality、Hysteria2、WebSocket 等节点信息。**三个节点只是当前场景，不是脚本的固定数量限制。**
+`proxies` 顶层必须是 `proxies:`，其中包含 Reality、Hysteria2、AnyTLS、ShadowTLS、WebSocket 等节点信息。**节点数量由部署脚本决定，订阅安装器不限制为三个或五个。**
 
-Quick Tunnel 自动更新的前提：现有 cloudflared 服务运行正常，推荐 systemd 单元名称为 `quicktunnel.service`。更新器先从该服务的 journal 日志提取最近的 `*.trycloudflare.com` 域名；如果没有找到，再尝试本机端口 `20241–20250` 的 `/quicktunnel` 接口。若部署方式不同，需要调整嵌入的更新器。
+Quick Tunnel 自动更新的前提：现有 cloudflared 服务运行正常，推荐 systemd 单元名称为 `quicktunnel.service`。当前更新器通过 cloudflared 进程定位 metrics 地址，并从 `/quicktunnel` 接口读取域名。若部署方式不同，需要调整嵌入的更新器。
 
 ## 3. 安装器源文件
 
@@ -31,7 +31,7 @@ Quick Tunnel 自动更新的前提：现有 cloudflared 服务运行正常，推
 
 ## 4. 安装方法
 
-前置依赖：Nginx、Python 3、OpenSSL、curl、ACL（`setfacl`）、systemd，且存在 `www-data` 用户。**安装器检查依赖，但不自动安装。** 默认监听 TCP 18080，可通过 `SUBSCRIPTION_PORT` 环境变量调整。系统防火墙和云防火墙需自行配置。
+前置依赖：Nginx、Python 3、OpenSSL、curl、ACL（`setfacl`）、systemd，且存在 `www-data` 用户。**安装器会在缺少 `setfacl` 时自动安装 `acl`，其他依赖需预先安装。** 默认监听 TCP 18080，可通过 `SUBSCRIPTION_PORT` 环境变量调整。安装器会添加 UFW 的订阅端口放行规则（若 UFW 已安装）；云平台防火墙仍需自行配置。
 
 ```bash
 # 进入安装器目录
@@ -73,9 +73,9 @@ cloudflared Quick Tunnel 域名发生变化
   → update-quicktunnel.timer（约每 5 分钟）
   → update-quicktunnel.service
   → /etc/sing-box/scripts/update-quicktunnel.sh
-  → 从 quicktunnel.service 日志或本地 metrics 提取域名
+  → 从 cloudflared 进程对应的本地 metrics 提取域名
   → 只更新 proxies 中现有 trycloudflare.com 的 servername 和 Host
-  → 新文件预先设置 www-data ACL，原子替换 proxies
+  → 原子替换 proxies，再设置 www-data ACL
   → Nginx 发布更新后的订阅
   → Mihomo Provider 按 interval 拉取
 ```
@@ -88,3 +88,7 @@ cloudflared Quick Tunnel 域名发生变化
 - 安装器会对现有 `proxies` 设置 `600` 权限，并授予 `www-data` ACL 读取权限。更新器在原子替换前先对新文件设置 ACL，避免 Nginx 403。
 - 订阅使用 **HTTP 明文**，URL Token 和节点凭据可能在传输途中泄露；生产环境建议改用 HTTPS，勿将 `proxies`、`token` 或真实订阅 URL 提交到公开仓库。
 - 此版本已做 Bash 语法检查，但**尚未在全新 VPS 上完成端到端安装测试**。建议先在测试实例上验证 Quick Tunnel 日志提取与节点格式兼容性。
+
+## 8. 五节点部署脚本的配合
+
+全新 VPS 使用 `scripts/install-singbox-nodes.sh` 生成五个 Mihomo 节点（Reality、Hysteria2、AnyTLS、ShadowTLS、VLESS-WS-TLS）及 `/etc/sing-box/subscribe/proxies`，随后执行订阅安装器。Quick Tunnel 定时更新只修改 WS 节点的 `servername` 和 `Host`；其余四个节点保持不变。已部署的 VPS 不应重新执行全新安装脚本以更新订阅。
