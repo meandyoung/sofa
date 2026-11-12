@@ -8,7 +8,7 @@ fail(){ printf '[WARP] 失败：%s\n' "$*" >&2; printf 'failed: %s\n' "$*" > "$D
 [[ $EUID -eq 0 && -s $C ]] || fail '需要 root 且 sing-box 已安装'
 if [[ $mode == status ]]; then cat "$D/status" 2>/dev/null || echo not-configured; exit 0; fi
 [[ -c /dev/net/tun ]] || fail 'TUN 不可用'
-case "$mode" in install|register|apply) ;; *) fail '用法：install | register | apply 规则文件 | status' ;; esac
+case "$mode" in install|register) ;; *) fail '用法：install | register | status（规则更新请使用 sync-config.sh）' ;; esac
 tmp=$(mktemp -d "$D/.work.XXXXXX")
 pid=''
 cleanup(){ if [[ -n $pid ]]; then kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; fi; rm -f "$D/account.json.pending"; rm -rf "$tmp"; }
@@ -30,12 +30,7 @@ except Exception as e:sys.exit('注册响应无效: '+str(e))
 PY
   [[ -s $D/account.json.pending ]] || fail '注册数据无效'
 fi
-if [[ $mode == apply ]]; then
-  [[ -s ${2:-} ]] || fail '未提供规则文件'
-  cp "$2" "$tmp/rules.json"
-else
-  curl -fsSL --retry 2 --max-time 20 https://raw.githubusercontent.com/meandyoung/sofa/main/config/warp-rules.json -o "$tmp/rules.json" || fail '初始规则下载失败'
-fi
+curl -fsSL --retry 2 --max-time 20 https://raw.githubusercontent.com/meandyoung/sofa/main/config/warp-rules.json -o "$tmp/rules.json" || fail '初始规则下载失败'
 # 从独立规则文件生成配置，不修改节点入站及默认 direct 出站。
 python3 - "$C" "$D" "$tmp" <<'PY'
 import json,sys,re,os
@@ -108,7 +103,7 @@ for i in 1 2 3 4 5; do
 done
 [[ $ok == true ]] || fail 'WARP 连通性检查失败'
 kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; pid=''
-if [[ $mode != apply ]]; then
+if true; then
  response=$(curl -4 -sSL --connect-timeout 3 --max-time 8 https://api.openai.com/compliance/cookie_requirements || true)
  if grep -qi unsupported_country <<< "$response"; then echo warp-ep > "$tmp/openai-outbound"; else echo direct > "$tmp/openai-outbound"; fi
  # 在生成最终配置前写入临时检测结果并更新 auto 规则。
