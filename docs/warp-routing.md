@@ -1,8 +1,8 @@
-# WARP 可选出口与 GitHub 规则同步
+# WARP 可选出口与手动规则同步
 
 ## 设计
 
-安装顺序：原有五节点 → 可选 WARP → Mihomo HTTP 订阅 → 每日同步定时器。
+安装顺序：原有五节点 → 可选 WARP → Mihomo HTTP 订阅。
 WARP 安装失败不会阻止节点或订阅安装。原有 `install-singbox-nodes.sh` 不依赖 WARP。
 
 GitHub 的 `config/warp-rules.json` 是规则唯一维护入口：
@@ -31,7 +31,7 @@ GitHub 的 `config/warp-rules.json` 是规则唯一维护入口：
 - `/usr/local/libexec/sofa/configure-warp.sh`：可选 WARP 安装及配置应用。
 - `/usr/local/libexec/sofa/sync-config.sh`：统一配置同步脚本。
 
-`sofa-sync-config.timer` 每天运行，下载失败、内容无变化或验证/应用失败时保留原配置；WARP 未安装则跳过 WARP 模块。未来其他配置可在 `sync-config.sh` 增加独立同步模块。
+不创建每日同步定时器。只有手动运行 `sync-config.sh` 时才检查 GitHub 规则；下载失败、内容无变化或验证/应用失败时保留原配置；WARP 未安装则跳过 WARP 模块。未来其他配置可在 `sync-config.sh` 增加独立同步模块。
 
 ## 操作
 
@@ -40,8 +40,10 @@ GitHub 的 `config/warp-rules.json` 是规则唯一维护入口：
 /usr/local/libexec/sofa/configure-warp.sh status
 # 手动触发一次 GitHub 规则同步
 /usr/local/libexec/sofa/sync-config.sh
-# 查看每天的定时任务
-systemctl list-timers sofa-sync-config.timer
+# 如果旧版安装曾启用每日定时器，执行一次以下命令关闭并删除它
+systemctl disable --now sofa-sync-config.timer 2>/dev/null || true
+rm -f /etc/systemd/system/sofa-sync-config.timer /etc/systemd/system/sofa-sync-config.service
+systemctl daemon-reload
 ```
 
 注意：目前一键安装脚本只允许全新 VPS 部署，不可直接在已有节点的 VPS 上重跑。WARP 不保证固定美国 IP；对固定 IP 有要求的金融网站应继续使用原生 VPS。首次注册依赖 fscarmen WARP 注册接口，外部接口发生变化可能导致注册失败。
