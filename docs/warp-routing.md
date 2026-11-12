@@ -28,8 +28,8 @@ GitHub 的 `config/warp-rules.json` 是规则唯一维护入口：
 - `/etc/sing-box/warp/rules.json`：最近成功应用的 GitHub 规则。
 - `/etc/sing-box/warp/rules.json.bak`：上一次成功规则。
 - `/etc/sing-box/warp/status`：部署状态。
-- `/usr/local/libexec/sofa/configure-warp.sh`：可选 WARP 安装及配置应用。
-- `/usr/local/libexec/sofa/sync-config.sh`：统一配置同步脚本。
+- `/usr/local/libexec/sofa/configure-warp.sh`：仅用于首次 WARP 安装和注册。
+- `/usr/local/libexec/sofa/sync-config.sh`：部署后统一的手动配置更新入口（不调用安装脚本）。详见 [sync-config.md](sync-config.md)。
 
 不创建每日同步定时器。只有手动运行 `sync-config.sh` 时才检查 GitHub 规则；下载失败、内容无变化或验证/应用失败时保留原配置；WARP 未安装则跳过 WARP 模块。未来其他配置可在 `sync-config.sh` 增加独立同步模块。
 
