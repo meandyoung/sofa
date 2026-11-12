@@ -1,0 +1,9 @@
+{
+  "auto": [
+    "openai.com",
+    "chatgpt.com"
+  ],
+  "warp": [],
+  "direct": [],
+  "rule_sets": {}
+}
