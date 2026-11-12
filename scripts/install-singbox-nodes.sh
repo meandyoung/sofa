@@ -36,7 +36,7 @@ for p in "$REALITY_PORT/tcp" "$HY2_PORT/udp" "$ANYTLS_PORT/tcp" "$SHADOWTLS_PORT
   fi
 done
 apt-get update
-apt-get install -y curl ca-certificates openssl python3 nginx tar gzip iproute2 ufw
+apt-get install -y curl ca-certificates openssl python3 nginx tar gzip iproute2 ufw acl
 arch=$(dpkg --print-architecture)
 case "$arch" in amd64|arm64) ;; *) fail "不支持架构 $arch";; esac
 work=$(mktemp -d)
