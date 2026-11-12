@@ -1,92 +1,108 @@
 #!/usr/bin/env bash
-# 可选 WARP：注册失败不影响原有节点。
+# 可选 WARP 模块：不运行或失败均不影响原有五节点。
 set -Eeuo pipefail
-B=/etc/sing-box
-D=$B/warp
-C=$B/config.json
+B=/etc/sing-box; D=$B/warp; C=$B/config.json
 mkdir -p "$D"; chmod 700 "$D"
-fail(){ echo "WARP: 失败 - $*" >&2; echo "failed: $*" > "$D/status"; exit 1; }
-[[ $EUID -eq 0 && -s $C ]] || fail '请先部署 sing-box 节点'
-[[ -c /dev/net/tun ]] || fail 'TUN 不可用'
 mode=${1:-install}
-case "$mode" in install|register|add-domain|remove-domain|add-rule-set|remove-rule-set|status) ;; *) fail '未知命令' ;; esac
+fail(){ printf '[WARP] 失败：%s\n' "$*" >&2; printf 'failed: %s\n' "$*" > "$D/status"; exit 1; }
+[[ $EUID -eq 0 && -s $C ]] || fail '需要 root 且 sing-box 已安装'
 if [[ $mode == status ]]; then cat "$D/status" 2>/dev/null || echo not-configured; exit 0; fi
-tmp=$(mktemp -d "$D/.tmp.XXXX")
-trap 'rm -rf "$tmp"' EXIT
+[[ -c /dev/net/tun ]] || fail 'TUN 不可用'
+case "$mode" in install|register|apply) ;; *) fail '用法：install | register | apply 规则文件 | status' ;; esac
+tmp=$(mktemp -d "$D/.work.XXXXXX")
+pid=''
+cleanup(){ if [[ -n $pid ]]; then kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; fi; rm -rf "$tmp"; }
+trap cleanup EXIT
 if [[ ! -s $D/account.json || $mode == register ]]; then
- curl -fsSL --max-time 20 https://gitlab.com/fscarmen/warp/-/raw/main/api.sh -o "$tmp/api.sh" || fail '注册脚本下载失败'
- timeout 40 bash "$tmp/api.sh" --register > "$tmp/registration.json" || fail 'WARP 注册失败'
- python3 - "$tmp/registration.json" "$tmp/account.new" <<'PY'
-import json,sys
+  curl -fsSL --retry 2 --max-time 20 https://gitlab.com/fscarmen/warp/-/raw/main/api.sh -o "$tmp/api.sh" || fail '注册脚本下载失败'
+  timeout 45 bash "$tmp/api.sh" --register > "$tmp/registration.json" || fail 'WARP 注册接口失败'
+  python3 - "$tmp/registration.json" "$tmp/account.json" <<'PY'
+import json,sys,os
 try:
  d=json.load(open(sys.argv[1]))
- assert d.get('id') and d.get('v6') and d.get('private_key') and len(d.get('reserved',[]))==3
- json.dump({'v6':d['v6'],'private_key':d['private_key'],'reserved':d['reserved']},open(sys.argv[2],'w'))
+ v=d.get('v6') or d.get('address6');k=d.get('private_key');r=d.get('reserved')
+ assert isinstance(v,str) and ':' in v and isinstance(k,str) and len(k)>20
+ assert isinstance(r,list) and len(r)==3 and all(type(x)==int and 0<=x<=255 for x in r)
+ with open(sys.argv[2]+'.pending','w') as f:json.dump({'v6':v,'private_key':k,'reserved':r},f)
+ os.chmod(sys.argv[2]+'.pending',0o600)
 except Exception as e:sys.exit('注册响应无效: '+str(e))
 PY
- chmod 600 "$tmp/account.new"
+  [[ -s $D/account.json.pending ]] || fail '注册数据无效'
 fi
-WARP_RULE_URL="${3:-}" python3 - "$C" "$D" "$tmp" "$mode" "${2:-}" <<'PY'
+if [[ $mode == apply ]]; then
+  [[ -s ${2:-} ]] || fail '未提供规则文件'
+  cp "$2" "$tmp/rules.json"
+else
+  curl -fsSL --retry 2 --max-time 20 https://raw.githubusercontent.com/meandyoung/sofa/main/config/warp-rules.json -o "$tmp/rules.json" || fail '初始规则下载失败'
+fi
+# 从独立规则文件生成配置，不修改节点入站及默认 direct 出站。
+python3 - "$C" "$D" "$tmp" <<'PY'
 import json,sys,re,os
-c,d,t,mode,domain=sys.argv[1:]
-account=json.load(open(t+'/account.new' if os.path.exists(t+'/account.new') else d+'/account.json'))
-try:rules=json.load(open(d+'/rules.json'))
-except FileNotFoundError:rules={'domains':[],'sets':{}}
-rules.setdefault('sets',{})
-if mode in ('add-domain','remove-domain'):
- domain=domain.lower().strip().lstrip('.')
- if not re.fullmatch(r'[a-z0-9-]+(?:\.[a-z0-9-]+)+',domain):sys.exit('无效域名')
- if mode=='add-domain' and domain not in rules['domains']:rules['domains'].append(domain)
- if mode=='remove-domain':rules['domains']=[x for x in rules['domains'] if x!=domain]
-if mode in ('add-rule-set','remove-rule-set'):
- if not re.fullmatch(r'[A-Za-z0-9_-]+',domain):sys.exit('规则集名称无效')
- if mode=='add-rule-set':
-  url=os.environ.get('WARP_RULE_URL','')
-  if not url.startswith('https://') or not url.endswith('.srs'):sys.exit('需要 HTTPS .srs 规则集 URL')
-  rules['sets'][domain]=url
- else:rules['sets'].pop(domain,None)
-json.dump(rules,open(t+'/rules.json','w'),indent=2)
-ep={'type':'wireguard','tag':'warp-ep','mtu':1400,'address':['172.16.0.2/32',account['v6'].split('/')[0]+'/128'],'private_key':account['private_key'],'peers':[{'address':'engage.cloudflareclient.com','port':2408,'public_key':'bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=','allowed_ips':['0.0.0.0/0','::/0'],'reserved':account['reserved']}]}
+c,d,t=sys.argv[1:]
+rules=json.load(open(t+'/rules.json'))
+assert set(rules)=={'auto','warp','direct','rule_sets'}
+for k in ('auto','warp','direct'):
+ assert isinstance(rules[k],list) and all(isinstance(x,str) and re.fullmatch(r'[a-z0-9-]+(?:\.[a-z0-9-]+)+',x) for x in rules[k])
+assert isinstance(rules['rule_sets'],dict)
+assert all(re.fullmatch(r'[A-Za-z0-9_-]+',k) and isinstance(v,str) and v.startswith('https://') and v.endswith('.srs') for k,v in rules['rule_sets'].items())
+assert len(set(rules['auto']+rules['warp']+rules['direct']))==sum(len(rules[k]) for k in ('auto','warp','direct'))
+a=json.load(open(d+'/account.json.pending' if os.path.exists(d+'/account.json.pending') else d+'/account.json'))
+ep={'type':'wireguard','tag':'warp-ep','mtu':1400,'address':['172.16.0.2/32',a['v6'].split('/')[0]+'/128'],'private_key':a['private_key'],'peers':[{'address':'engage.cloudflareclient.com','port':2408,'public_key':'bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=','allowed_ips':['0.0.0.0/0','::/0'],'reserved':a['reserved']}]}
 cfg=json.load(open(c));cfg['endpoints']=[x for x in cfg.get('endpoints',[]) if x.get('tag')!='warp-ep']+[ep]
 route=cfg.setdefault('route',{})
-route['rules']=[r for r in route.get('rules',[]) if r.get('outbound')!='warp-ep']
-if rules['domains']:route['rules'].insert(0,{'domain_suffix':rules['domains'],'outbound':'warp-ep'})
-route['rule_set']=[r for r in route.get('rule_set',[]) if r.get('tag') not in rules['sets']]
-for name,url in rules['sets'].items():
- route['rule_set'].append({'tag':name,'type':'remote','format':'binary','url':url})
-if rules['sets']:route['rules'].insert(0,{'rule_set':list(rules['sets']),'outbound':'warp-ep'})
-json.dump(cfg,open(t+'/candidate.json','w'),indent=2)
-json.dump({'inbounds':[{'type':'socks','listen':'127.0.0.1','listen_port':19087}],'endpoints':[ep],'route':{'final':'warp-ep'}},open(t+'/probe.json','w'))
+# 只移除模块自身管理的旧规则；不触碰用户其他规则。
+route['rules']=[r for r in route.get('rules',[]) if r.get('outbound') not in ('warp-ep',) and r.get('domain_suffix')!=['openai.com','chatgpt.com']]
+route['rule_set']=[r for r in route.get('rule_set',[]) if not r.get('tag','').startswith('sofa-warp-')]
+new=[]
+if rules['direct']:new.append({'domain_suffix':rules['direct'],'action':'route','outbound':'direct'})
+if rules['warp']:new.append({'domain_suffix':rules['warp'],'action':'route','outbound':'warp-ep'})
+if rules['auto']:
+ # auto 仅安装时检测一次；后续规则同步时复用既有判断结果。
+ choice='direct'
+ state=d+'/openai-outbound'
+ if os.path.exists(state):choice=open(state).read().strip()
+ if choice not in ('direct','warp-ep'):choice='direct'
+ new.append({'domain_suffix':rules['auto'],'action':'route','outbound':choice})
+for name,url in rules['rule_sets'].items():
+ tag='sofa-warp-'+name
+ route['rule_set'].append({'tag':tag,'type':'remote','format':'binary','url':url})
+ new.append({'rule_set':[tag],'action':'route','outbound':'warp-ep'})
+route['rules']=new+route['rules']
+with open(t+'/candidate.json','w') as f:json.dump(cfg,f,indent=2)
+with open(t+'/probe.json','w') as f:json.dump({'inbounds':[{'type':'socks','listen':'127.0.0.1','listen_port':19087}],'endpoints':[ep],'route':{'final':'warp-ep'}},f)
 PY
-sing-box check -c "$tmp/probe.json" >/dev/null || fail 'Endpoint 配置校验失败'
+sing-box check -c "$tmp/probe.json" >/dev/null || fail 'Endpoint 校验失败'
 sing-box run -c "$tmp/probe.json" > "$tmp/probe.log" 2>&1 &
 pid=$!
-trap 'kill "$pid" 2>/dev/null || true; rm -rf "$tmp"' EXIT
 ok=false
 for i in 1 2 3 4 5; do
  if curl -fsS --socks5-hostname 127.0.0.1:19087 --connect-timeout 3 --max-time 6 https://www.cloudflare.com/cdn-cgi/trace > "$tmp/trace" 2>/dev/null && grep -Eq '^warp=(on|plus)' "$tmp/trace"; then ok=true; break; fi
  sleep 1
 done
-[[ $ok == true ]] || fail 'WARP 连接检测失败'
-kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true
-trap 'rm -rf "$tmp"' EXIT
-response=$(curl -4 -sSL --connect-timeout 3 --max-time 8 https://api.openai.com/compliance/cookie_requirements || true)
-openai=direct
-if grep -qi unsupported_country <<< "$response"; then
- openai=warp-ep
- python3 - "$tmp/candidate.json" <<'PY'
+[[ $ok == true ]] || fail 'WARP 连通性检查失败'
+kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; pid=''
+if [[ $mode != apply ]]; then
+ response=$(curl -4 -sSL --connect-timeout 3 --max-time 8 https://api.openai.com/compliance/cookie_requirements || true)
+ if grep -qi unsupported_country <<< "$response"; then echo warp-ep > "$tmp/openai-outbound"; else echo direct > "$tmp/openai-outbound"; fi
+ # 在生成最终配置前写入临时检测结果并更新 auto 规则。
+ python3 - "$tmp/candidate.json" "$tmp/openai-outbound" "$tmp/rules.json" <<'PY'
 import json,sys
-p=sys.argv[1];c=json.load(open(p));c['route']['rules'].insert(0,{'domain_suffix':['openai.com','chatgpt.com'],'outbound':'warp-ep'});json.dump(c,open(p,'w'),indent=2)
+p,choice,r=sys.argv[1:];c=json.load(open(p));d=json.load(open(r))
+for rule in c.get('route',{}).get('rules',[]):
+ if rule.get('domain_suffix')==d['auto']:rule['outbound']=open(choice).read().strip()
+json.dump(c,open(p,'w'),indent=2)
 PY
 fi
-sing-box check -c "$tmp/candidate.json" >/dev/null || fail '合并配置校验失败'
-cp -p "$C" "$tmp/backup"
-install -m 600 "$tmp/candidate.json" "$C.new"; mv "$C.new" "$C"
+sing-box check -c "$tmp/candidate.json" >/dev/null || fail '新配置校验失败'
+cp -p "$C" "$tmp/original.json"
+install -m 600 "$tmp/candidate.json" "$C.new"; mv -f "$C.new" "$C"
 if ! systemctl restart sing-box || ! systemctl is-active --quiet sing-box; then
- cp -p "$tmp/backup" "$C"; systemctl restart sing-box || true
- fail '应用失败，已回滚原配置'
+ cp -p "$tmp/original.json" "$C"; systemctl restart sing-box || true
+ fail '应用失败，已回滚 sing-box 配置'
 fi
-[[ ! -s "$tmp/account.new" ]] || install -m 600 "$tmp/account.new" "$D/account.json"
+[[ ! -s $D/account.json.pending ]] || mv -f "$D/account.json.pending" "$D/account.json"
+[[ ! -s $D/rules.json ]] || cp -p "$D/rules.json" "$D/rules.json.bak"
 install -m 600 "$tmp/rules.json" "$D/rules.json"
-printf 'registration=success\nendpoint=ok\nconnection=ok\nopenai=%s\n' "$openai" > "$D/status"
-echo "WARP: 成功，连接正常，OpenAI=$openai"
+[[ ! -s $tmp/openai-outbound ]] || install -m 600 "$tmp/openai-outbound" "$D/openai-outbound"
+printf 'registration=success\nendpoint=configured\nconnection=ok\n' > "$D/status"
+echo '[WARP] 注册/复用成功，Endpoint 已配置，连接正常'
