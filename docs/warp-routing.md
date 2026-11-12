@@ -1,28 +1,47 @@
-# WARP 可选出口
+# WARP 可选出口与 GitHub 规则同步
 
-一键部署顺序：五个代理节点 → 可选 WARP → Mihomo 订阅。WARP 失败只打印错误，不中断订阅安装。
+## 设计
 
-- 默认出站仍为 direct。WARP 账户优先复用 `/etc/sing-box/warp/account.json`，权限 600。
-- 首次注册使用 fscarmen WARP 注册脚本；注册失败不使用共享账户。
-- 通过临时 SOCKS 入站及 Cloudflare trace 检测 WARP 实际连通性。
-- 检测到 OpenAI 的 `unsupported_country` 才自动将 OpenAI 相关域名切换至 WARP。
-- 自定义规则保存到 `/etc/sing-box/warp/rules.json`。
-- 应用前进行 sing-box check，重启失败恢复原配置。
-- 不修改 Mihomo 节点订阅；WARP 不保证固定美国 IP。
+安装顺序：原有五节点 → 可选 WARP → Mihomo HTTP 订阅 → 每日同步定时器。
+WARP 安装失败不会阻止节点或订阅安装。原有 `install-singbox-nodes.sh` 不依赖 WARP。
 
-## 管理（在 VPS 上以 root 执行）
+GitHub 的 `config/warp-rules.json` 是规则唯一维护入口：
 
-```bash
-# 查看状态
-bash configure-warp.sh status
-# 重新注册账户
-bash configure-warp.sh register
-# 添加或删除域名后缀
-bash configure-warp.sh add-domain example.com
-bash configure-warp.sh remove-domain example.com
-# 添加或删除远程二进制规则集
-bash configure-warp.sh add-rule-set geosite-example https://example.com/geosite-example.srs
-bash configure-warp.sh remove-rule-set geosite-example
+```json
+{
+  "auto": ["openai.com", "chatgpt.com"],
+  "warp": [],
+  "direct": [],
+  "rule_sets": {}
+}
 ```
 
-注意：运行管理脚本需将其下载到 VPS；目前一键安装器下载后在临时目录执行，不会在 VPS 持久保存脚本本身。Cloudflare 注册接口或规则集地址变化时，WARP 可能部署失败，但原节点仍可运行。
+- `auto`：部署时检测原生 VPS 的 OpenAI 区域限制，选择 `direct` 或 `warp-ep`；这是安装时检测，不是实时故障切换。当前同步沿用上次检测结果。
+- `warp`：固定使用 WARP。
+- `direct`：固定使用 VPS 原生出口。
+- `rule_sets`：以名称映射 HTTPS .srs 地址，固定走 WARP。
+- 域名后缀不要重复归入多个分类。
+
+## VPS 文件
+
+- `/etc/sing-box/warp/account.json`：WARP 凭据（权限 600），正常重启或同步不会重新注册。
+- `/etc/sing-box/warp/rules.json`：最近成功应用的 GitHub 规则。
+- `/etc/sing-box/warp/rules.json.bak`：上一次成功规则。
+- `/etc/sing-box/warp/status`：部署状态。
+- `/usr/local/libexec/sofa/configure-warp.sh`：可选 WARP 安装及配置应用。
+- `/usr/local/libexec/sofa/sync-config.sh`：统一配置同步脚本。
+
+`sofa-sync-config.timer` 每天运行，下载失败、内容无变化或验证/应用失败时保留原配置；WARP 未安装则跳过 WARP 模块。未来其他配置可在 `sync-config.sh` 增加独立同步模块。
+
+## 操作
+
+```bash
+# 查看 WARP 状态
+/usr/local/libexec/sofa/configure-warp.sh status
+# 手动触发一次 GitHub 规则同步
+/usr/local/libexec/sofa/sync-config.sh
+# 查看每天的定时任务
+systemctl list-timers sofa-sync-config.timer
+```
+
+注意：目前一键安装脚本只允许全新 VPS 部署，不可直接在已有节点的 VPS 上重跑。WARP 不保证固定美国 IP；对固定 IP 有要求的金融网站应继续使用原生 VPS。首次注册依赖 fscarmen WARP 注册接口，外部接口发生变化可能导致注册失败。
