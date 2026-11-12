@@ -54,10 +54,11 @@ install -m 755 "$work/configure-warp.sh" /usr/local/libexec/sofa/configure-warp.
 install -m 755 "$work/sync-config.sh" /usr/local/libexec/sofa/sync-config.sh
 
 info '开始配置可选 WARP（失败不影响其他节点）'
-if bash "$work/configure-warp.sh" install; then
+warp_log="$work/warp-install.log"
+if bash "$work/configure-warp.sh" install >"$warp_log" 2>&1; then
   info 'WARP 已配置且连接正常'
 else
-  info 'WARP 未启用，继续安装订阅'
+  info 'WARP 安装失败，继续安装其他代理节点及订阅（可稍后单独重试）'
 fi
 info '开始安装 Mihomo HTTP 订阅与 Quick Tunnel 自动更新'
 bash "$work/install-mihomo-subscription.sh" || fail '订阅安装失败，请检查输出日志。'
