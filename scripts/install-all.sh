@@ -19,6 +19,9 @@ if [[ -z "${SOFA_NODE_NAME:-}" ]]; then
 fi
 [[ "$SOFA_NODE_NAME" =~ ^[a-z]{2}-[a-z0-9]+(-[a-z0-9]+)*$ ]] ||
   fail '名称格式错误，例如 us-dmit。'
+printf '当前 VPS 名称：%s\n' "$SOFA_NODE_NAME"
+read -r -p '请确认名称无误，按回车继续安装（输入其他内容则取消）：' confirmation
+[[ -z "$confirmation" ]] || fail '已取消安装，未执行后续安装步骤。'
 export SOFA_NODE_NAME
 
 # 临时下载安装器，退出时自动清理。
