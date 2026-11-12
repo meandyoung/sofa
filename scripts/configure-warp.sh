@@ -9,7 +9,7 @@ fail(){ echo "WARP: 失败 - $*" >&2; echo "failed: $*" > "$D/status"; exit 1; }
 [[ $EUID -eq 0 && -s $C ]] || fail '请先部署 sing-box 节点'
 [[ -c /dev/net/tun ]] || fail 'TUN 不可用'
 mode=${1:-install}
-case "$mode" in install|register|add-domain|remove-domain|status) ;; *) fail '未知命令' ;; esac
+case "$mode" in install|register|add-domain|remove-domain|add-rule-set|remove-rule-set|status) ;; *) fail '未知命令' ;; esac
 if [[ $mode == status ]]; then cat "$D/status" 2>/dev/null || echo not-configured; exit 0; fi
 tmp=$(mktemp -d "$D/.tmp.XXXX")
 trap 'rm -rf "$tmp"' EXIT
@@ -26,23 +26,35 @@ except Exception as e:sys.exit('注册响应无效: '+str(e))
 PY
  chmod 600 "$tmp/account.new"
 fi
-python3 - "$C" "$D" "$tmp" "$mode" "${2:-}" <<'PY'
+WARP_RULE_URL="${3:-}" python3 - "$C" "$D" "$tmp" "$mode" "${2:-}" <<'PY'
 import json,sys,re,os
 c,d,t,mode,domain=sys.argv[1:]
 account=json.load(open(t+'/account.new' if os.path.exists(t+'/account.new') else d+'/account.json'))
 try:rules=json.load(open(d+'/rules.json'))
-except FileNotFoundError:rules={'domains':[]}
+except FileNotFoundError:rules={'domains':[],'sets':{}}
+rules.setdefault('sets',{})
 if mode in ('add-domain','remove-domain'):
  domain=domain.lower().strip().lstrip('.')
  if not re.fullmatch(r'[a-z0-9-]+(?:\.[a-z0-9-]+)+',domain):sys.exit('无效域名')
  if mode=='add-domain' and domain not in rules['domains']:rules['domains'].append(domain)
  if mode=='remove-domain':rules['domains']=[x for x in rules['domains'] if x!=domain]
+if mode in ('add-rule-set','remove-rule-set'):
+ if not re.fullmatch(r'[A-Za-z0-9_-]+',domain):sys.exit('规则集名称无效')
+ if mode=='add-rule-set':
+  url=os.environ.get('WARP_RULE_URL','')
+  if not url.startswith('https://') or not url.endswith('.srs'):sys.exit('需要 HTTPS .srs 规则集 URL')
+  rules['sets'][domain]=url
+ else:rules['sets'].pop(domain,None)
 json.dump(rules,open(t+'/rules.json','w'),indent=2)
 ep={'type':'wireguard','tag':'warp-ep','mtu':1400,'address':['172.16.0.2/32',account['v6'].split('/')[0]+'/128'],'private_key':account['private_key'],'peers':[{'address':'engage.cloudflareclient.com','port':2408,'public_key':'bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=','allowed_ips':['0.0.0.0/0','::/0'],'reserved':account['reserved']}]}
 cfg=json.load(open(c));cfg['endpoints']=[x for x in cfg.get('endpoints',[]) if x.get('tag')!='warp-ep']+[ep]
 route=cfg.setdefault('route',{})
 route['rules']=[r for r in route.get('rules',[]) if r.get('outbound')!='warp-ep']
 if rules['domains']:route['rules'].insert(0,{'domain_suffix':rules['domains'],'outbound':'warp-ep'})
+route['rule_set']=[r for r in route.get('rule_set',[]) if r.get('tag') not in rules['sets']]
+for name,url in rules['sets'].items():
+ route['rule_set'].append({'tag':name,'type':'remote','format':'binary','url':url})
+if rules['sets']:route['rules'].insert(0,{'rule_set':list(rules['sets']),'outbound':'warp-ep'})
 json.dump(cfg,open(t+'/candidate.json','w'),indent=2)
 json.dump({'inbounds':[{'type':'socks','listen':'127.0.0.1','listen_port':19087}],'endpoints':[ep],'route':{'final':'warp-ep'}},open(t+'/probe.json','w'))
 PY
