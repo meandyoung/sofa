@@ -42,28 +42,8 @@ fi
 info '开始安装 Mihomo HTTP 订阅与 Quick Tunnel 自动更新'
 bash "$work/install-mihomo-subscription.sh" || fail '订阅安装失败，请检查输出日志。'
 
-# 每日同步 GitHub 规则；定时器不依赖 WARP 是否安装成功。
-cat > /etc/systemd/system/sofa-sync-config.service <<'UNIT'
-[Unit]
-Description=Sync sofa configuration from GitHub
-After=network-online.target
-Wants=network-online.target
-[Service]
-Type=oneshot
-ExecStart=/usr/local/libexec/sofa/sync-config.sh
-UNIT
-cat > /etc/systemd/system/sofa-sync-config.timer <<'UNIT'
-[Unit]
-Description=Daily sofa GitHub configuration sync
-[Timer]
-OnCalendar=daily
-Persistent=true
-RandomizedDelaySec=15m
-[Install]
-WantedBy=timers.target
-UNIT
-systemctl daemon-reload
-systemctl enable --now sofa-sync-config.timer || info '配置同步定时器未启用，请手动检查'
+# 仅保留手动同步入口，不创建或启用每日定时任务。
+info '配置同步采用手动触发：/usr/local/libexec/sofa/sync-config.sh'
 info '全部安装完成，节点名称如下：'
 grep -E '^  - name:' "$BASE/subscribe/proxies"
 info '服务状态：'
