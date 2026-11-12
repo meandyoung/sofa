@@ -148,8 +148,9 @@ Wants=network-online.target
 [Service]
 Type=simple
 ExecStart=/usr/local/bin/cloudflared tunnel --no-autoupdate --metrics 127.0.0.1:${CF_METRICS_PORT} --url http://127.0.0.1:${NGINX_WS_PORT}
+# Quick Tunnel 申请失败（包括 HTTP 429）后等待 5 分钟再启动，避免密集重试。
 Restart=always
-RestartSec=5
+RestartSec=300
 [Install]
 WantedBy=multi-user.target
 UNIT
@@ -184,9 +185,7 @@ systemctl enable --now quicktunnel.service
 domain='PENDING.trycloudflare.com'
 for i in $(seq 1 25); do
   found=$(curl -fsS --max-time 2 "http://127.0.0.1:${CF_METRICS_PORT}/quicktunnel" 2>/dev/null | grep -Eo '[a-zA-Z0-9-]+\.trycloudflare\.com' | head -1 || true)
-  if [[ -z $found ]]; then
-    found=$(journalctl -u quicktunnel.service -n 80 --no-pager -o cat 2>/dev/null | grep -Eo '[a-zA-Z0-9-]+\.trycloudflare\.com' | tail -1 || true)
-  fi
+  # 仅使用当前进程的 metrics 获取域名，避免读取旧日志中的过期域名。
   if [[ -n $found ]]; then domain=$found; break; fi
   sleep 2
 done
@@ -232,7 +231,7 @@ info "sing-box 配置：$BASE/config.json"
 info "证书与密钥目录：$BASE/certs"
 info "Quick Tunnel 域名：$domain"
 if [[ $domain == PENDING.trycloudflare.com ]]; then
-  info '域名暂未获取；WS 节点不可用，等待 cloudflared 运行后再更新。'
+  info 'Quick Tunnel 申请失败或尚未就绪；将每隔 5 分钟重新申请，成功后自动更新订阅域名。'
 fi
 info 'UFW 已添加 TCP 443、8444、8446 及 UDP 8443 规则；仍需确认 UFW 状态及云平台防火墙。HTTP 订阅端口由另一安装器配置。'
 info 'HY2 使用自签名证书和 SHA-256 指纹校验；证书更新时需同步更新 fingerprint。'
