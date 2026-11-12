@@ -27,8 +27,8 @@ info() { echo "[INFO] $*"; }
 # 如果缺少 setfacl，自动安装 acl 软件包
 if ! command -v setfacl >/dev/null 2>&1; then
   info "正在安装 acl 软件包..."
-  apt-get update -qq
-  DEBIAN_FRONTEND=noninteractive apt-get install -y acl
+  apt-get -o DPkg::Lock::Timeout=600 update -qq
+  DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=600 install -y acl
 fi
 for cmd in nginx python3 openssl curl setfacl systemctl journalctl getent; do
   command -v "$cmd" >/dev/null || fail "缺少依赖：$cmd"
