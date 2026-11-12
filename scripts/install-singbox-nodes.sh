@@ -6,6 +6,11 @@ set -Eeuo pipefail
 export DEBIAN_FRONTEND=noninteractive
 BASE=/etc/sing-box
 PROXIES="$BASE/subscribe/proxies"
+NODE_NAME="${SOFA_NODE_NAME:-}"
+if [[ -z "$NODE_NAME" ]]; then
+  read -r -p '请输入 VPS 名称（例如 us-dmit）：' NODE_NAME
+fi
+[[ "$NODE_NAME" =~ ^[a-z]{2}-[a-z0-9]+(-[a-z0-9]+)*$ ]] || { echo '[ERROR] VPS 名称格式错误'; exit 1; }
 REALITY_PORT=443
 HY2_PORT=8443
 ANYTLS_PORT=8444
@@ -185,16 +190,16 @@ done
 # ============================================================
 # Mihomo 节点模块：将五个节点统一输出为多行 YAML
 # ============================================================
-python3 - "$PROXIES" "$public_ip" "$uuid" "$ws_uuid" "$public_key" "$short_id" "$hy_password" "$domain" "$REALITY_SNI" "$WS_PATH" "$REALITY_PORT" "$HY2_PORT" "$hy_fingerprint" "$ANYTLS_PORT" "$SHADOWTLS_PORT" "$anytls_password" "$shadowtls_password" "$ss2022_password" <<'PY'
+python3 - "$PROXIES" "$NODE_NAME" "$public_ip" "$uuid" "$ws_uuid" "$public_key" "$short_id" "$hy_password" "$domain" "$REALITY_SNI" "$WS_PATH" "$REALITY_PORT" "$HY2_PORT" "$hy_fingerprint" "$ANYTLS_PORT" "$SHADOWTLS_PORT" "$anytls_password" "$shadowtls_password" "$ss2022_password" <<'PY'
 import json,sys
-p,ip,uuid,ws_uuid,pub,short,pwd,domain,sni,path,rport,hport,hyfp,anyport,shadowport,anypwd,shadowpwd,sspwd=sys.argv[1:]
+p,node_name,ip,uuid,ws_uuid,pub,short,pwd,domain,sni,path,rport,hport,hyfp,anyport,shadowport,anypwd,shadowpwd,sspwd=sys.argv[1:]
 # 统一生成块式（多行）YAML；兼容 Mihomo 及现有域名更新器。
 entries=[
- {"name":"vultr-reality","type":"vless","server":ip,"port":int(rport),"uuid":uuid,"network":"tcp","tls":True,"udp":True,"servername":sni,"client-fingerprint":"chrome","flow":"xtls-rprx-vision","reality-opts":{"public-key":pub,"short-id":short}},
- {"name":"vultr-hysteria2","type":"hysteria2","server":ip,"port":int(hport),"password":pwd,"sni":sni,"skip-cert-verify":False,"fingerprint":hyfp},
- {"name":"vultr-anytls","type":"anytls","server":ip,"port":int(anyport),"password":anypwd,"sni":sni,"skip-cert-verify":False,"fingerprint":hyfp,"client-fingerprint":"chrome"},
- {"name":"vultr-shadowtls","type":"ss","server":ip,"port":int(shadowport),"cipher":"2022-blake3-aes-128-gcm","password":sspwd,"plugin":"shadow-tls","plugin-opts":{"version":3,"host":sni,"password":shadowpwd},"smux":{"enabled":True,"protocol":"h2mux","padding":True}},
- {"name":"vultr-vless-ws-tls","type":"vless","server":"skk.moe","port":443,"uuid":ws_uuid,"udp":True,"tls":True,"servername":domain,"network":"ws","skip-cert-verify":False,"ws-opts":{"path":path,"headers":{"Host":domain},"max-early-data":2560,"early-data-header-name":"Sec-WebSocket-Protocol"},"smux":{"enabled":True,"protocol":"h2mux","padding":True,"max-connections":8,"min-streams":16,"statistic":True,"only-tcp":False}}
+ {"name":f"{node_name}-reality","type":"vless","server":ip,"port":int(rport),"uuid":uuid,"network":"tcp","tls":True,"udp":True,"servername":sni,"client-fingerprint":"chrome","flow":"xtls-rprx-vision","reality-opts":{"public-key":pub,"short-id":short}},
+ {"name":f"{node_name}-hysteria2","type":"hysteria2","server":ip,"port":int(hport),"password":pwd,"sni":sni,"skip-cert-verify":False,"fingerprint":hyfp},
+ {"name":f"{node_name}-anytls","type":"anytls","server":ip,"port":int(anyport),"password":anypwd,"sni":sni,"skip-cert-verify":False,"fingerprint":hyfp,"client-fingerprint":"chrome"},
+ {"name":f"{node_name}-shadowtls","type":"ss","server":ip,"port":int(shadowport),"cipher":"2022-blake3-aes-128-gcm","password":sspwd,"plugin":"shadow-tls","plugin-opts":{"version":3,"host":sni,"password":shadowpwd},"smux":{"enabled":True,"protocol":"h2mux","padding":True}},
+ {"name":f"{node_name}-vless-ws-tls","type":"vless","server":"skk.moe","port":443,"uuid":ws_uuid,"udp":True,"tls":True,"servername":domain,"network":"ws","skip-cert-verify":False,"ws-opts":{"path":path,"headers":{"Host":domain},"max-early-data":2560,"early-data-header-name":"Sec-WebSocket-Protocol"},"smux":{"enabled":True,"protocol":"h2mux","padding":True,"max-connections":8,"min-streams":16,"statistic":True,"only-tcp":False}}
 ]
 
 def scalar(value):
