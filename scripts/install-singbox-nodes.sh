@@ -60,7 +60,7 @@ short_id=$(openssl rand -hex 8)
 hy_password=$(openssl rand -hex 24)
 anytls_password=$(openssl rand -hex 24)
 shadowtls_password=$(openssl rand -hex 24)
-ss2022_password=$(openssl rand -base64 32 | tr -d '\n')
+ss2022_password=$(openssl rand -base64 16 | tr -d '\n')
 # HY2 自签名证书使用 SNI www.apple.com，并固定 SHA-256 指纹验证。
 public_ip=$(curl -fsS --max-time 10 -4 https://api.ipify.org) || fail '无法识别公网 IPv4'
 [[ $public_ip =~ ^[0-9.]+$ ]] || fail '公网 IP 格式异常'
@@ -91,7 +91,7 @@ config={"log":{"level":"info","timestamp":True},"inbounds":[
  {"type":"vless","tag":"ws-in","listen":"127.0.0.1","listen_port":int(wsport),"users":[{"uuid":ws_uuid}],"transport":{"type":"ws","path":path,"max_early_data":2560,"early_data_header_name":"Sec-WebSocket-Protocol"},"multiplex":{"enabled":True}},
  {"type":"anytls","tag":"anytls-in","listen":"::","listen_port":int(anyport),"users":[{"password":anypwd}],"tls":{"enabled":True,"certificate_path":"/etc/sing-box/certs/hy2.crt","key_path":"/etc/sing-box/certs/hy2.key"}},
  {"type":"shadowtls","tag":"shadowtls-in","listen":"::","listen_port":int(shadowport),"version":3,"users":[{"name":"client","password":shadowpwd}],"handshake":{"server":sni,"server_port":443},"detour":"shadowtls-ss-in","strict_mode":True},
- {"type":"shadowsocks","tag":"shadowtls-ss-in","listen":"127.0.0.1","listen_port":int(ssport),"method":"2022-blake3-aes-256-gcm","password":sspwd}
+ {"type":"shadowsocks","tag":"shadowtls-ss-in","listen":"127.0.0.1","listen_port":int(ssport),"method":"2022-blake3-aes-128-gcm","password":sspwd,"multiplex":{"enabled":True,"padding":True}}
 ],"outbounds":[{"type":"direct","tag":"direct"}]}
 with open(p,'w') as f:json.dump(config,f,indent=2)
 PY
@@ -193,7 +193,7 @@ entries=[
  {"name":"vultr-reality","type":"vless","server":ip,"port":int(rport),"uuid":uuid,"network":"tcp","tls":True,"udp":True,"servername":sni,"client-fingerprint":"chrome","flow":"xtls-rprx-vision","reality-opts":{"public-key":pub,"short-id":short}},
  {"name":"vultr-hysteria2","type":"hysteria2","server":ip,"port":int(hport),"password":pwd,"sni":sni,"skip-cert-verify":False,"fingerprint":hyfp},
  {"name":"vultr-anytls","type":"anytls","server":ip,"port":int(anyport),"password":anypwd,"sni":sni,"skip-cert-verify":False,"fingerprint":hyfp,"client-fingerprint":"chrome"},
- {"name":"vultr-shadowtls","type":"ss","server":ip,"port":int(shadowport),"cipher":"2022-blake3-aes-256-gcm","password":sspwd,"plugin":"shadow-tls","plugin-opts":{"version":3,"host":sni,"password":shadowpwd}},
+ {"name":"vultr-shadowtls","type":"ss","server":ip,"port":int(shadowport),"cipher":"2022-blake3-aes-128-gcm","password":sspwd,"plugin":"shadow-tls","plugin-opts":{"version":3,"host":sni,"password":shadowpwd},"smux":{"enabled":True,"protocol":"h2mux","padding":True}},
  {"name":"vultr-vless-ws-tls","type":"vless","server":"skk.moe","port":443,"uuid":ws_uuid,"udp":True,"tls":True,"servername":domain,"network":"ws","skip-cert-verify":False,"ws-opts":{"path":path,"headers":{"Host":domain},"max-early-data":2560,"early-data-header-name":"Sec-WebSocket-Protocol"},"smux":{"enabled":True,"protocol":"h2mux","padding":True,"max-connections":8,"min-streams":16,"statistic":True,"only-tcp":False}}
 ]
 
