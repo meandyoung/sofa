@@ -105,12 +105,30 @@ PY
 sing-box check -c "$tmp/probe.json" >/dev/null || fail 'Endpoint 校验失败'
 sing-box run -c "$tmp/probe.json" > "$tmp/probe.log" 2>&1 &
 pid=$!
-ok=false
-for i in 1 2 3 4 5; do
- if curl -fsS --socks5-hostname 127.0.0.1:19087 --connect-timeout 3 --max-time 6 https://www.cloudflare.com/cdn-cgi/trace > "$tmp/trace" 2>/dev/null && grep -Eq '^warp=(on|plus)' "$tmp/trace"; then ok=true; break; fi
+# 等待临时 SOCKS5 监听就绪，避免首次安装时过早发起测试。
+ready=false
+for i in $(seq 1 20); do
+ if ! kill -0 "$pid" 2>/dev/null; then break; fi
+ if (echo > /dev/tcp/127.0.0.1/19087) >/dev/null 2>&1; then ready=true; break; fi
  sleep 1
 done
-[[ $ok == true ]] || fail 'WARP 连通性检查失败'
+if [[ $ready != true ]]; then
+ echo '[WARP] 临时 SOCKS5 未就绪，测试日志：' >&2
+ tail -n 50 "$tmp/probe.log" >&2
+ fail 'WARP 临时测试服务启动失败'
+fi
+ok=false
+for i in $(seq 1 10); do
+ if curl -fsS --socks5-hostname 127.0.0.1:19087 --connect-timeout 3 --max-time 6 https://www.cloudflare.com/cdn-cgi/trace > "$tmp/trace" 2>"$tmp/curl.err" && grep -Eq '^warp=(on|plus)' "$tmp/trace"; then ok=true; break; fi
+ [[ $i -eq 10 ]] || sleep 3
+done
+if [[ $ok != true ]]; then
+ echo '[WARP] 最后一次 curl 错误：' >&2
+ cat "$tmp/curl.err" >&2
+ echo '[WARP] 临时 sing-box 日志：' >&2
+ tail -n 50 "$tmp/probe.log" >&2
+ fail 'WARP 连通性检查失败'
+fi
 kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; pid=''
 if true; then
  response=$(curl -4 -sSL --connect-timeout 3 --max-time 8 https://api.openai.com/compliance/cookie_requirements || true)
