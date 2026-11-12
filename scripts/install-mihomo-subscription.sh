@@ -71,7 +71,7 @@ curl -fsSL --retry 3 "$TEMPLATE_URL" -o "$TMP_TEMPLATE" || fail '下载 Clash �
 NODE_NAME="$NODE_NAME" PROVIDER_URL="$PROVIDER_URL" TEMPLATE="$TMP_TEMPLATE" OUTPUT="$CLASH" python3 - <<'PY_TEMPLATE'
 import os, pathlib, tempfile
 template=pathlib.Path(os.environ["TEMPLATE"]).read_text(encoding="utf-8")
-assert template.count("NODE_NAME")==3, "模板中 NODE_NAME 数量异常"
+assert template.count("NODE_NAME")>=2, "模板缺少必要的 NODE_NAME 占位符"
 assert template.count("PROXY_PROVIDERS_URL")==1, "模板中订阅地址占位符数量异常"
 result=template.replace("NODE_NAME",os.environ["NODE_NAME"]).replace("PROXY_PROVIDERS_URL",os.environ["PROVIDER_URL"])
 out=pathlib.Path(os.environ["OUTPUT"])
