@@ -9,6 +9,8 @@ SCRIPT_DIR="$BASE/scripts"
 NGINX_DIR="$BASE/nginx"
 SYSTEMD_DIR="$BASE/systemd"
 PROXIES="$SUB_DIR/proxies"
+CLASH="$SUB_DIR/clash.yaml"
+TEMPLATE_URL="https://raw.githubusercontent.com/meandyoung/sofa/main/config/clash.yaml"
 PORT="${SUBSCRIPTION_PORT:-18080}"
 NGINX_LINK=/etc/nginx/conf.d/subscription.conf
 SERVICE_LINK=/etc/systemd/system/update-quicktunnel.service
@@ -53,6 +55,34 @@ setfacl -m u:www-data:--x "$BASE"
 setfacl -m u:www-data:--x "$SUB_DIR"
 setfacl -m u:www-data:r-- "$PROXIES"
 # ========== 03. 结束 ==========
+
+# ========== 03A. 生成完整 Mihomo 配置 ==========
+# 已部署 VPS 可单独运行此安装器；节点名称不会在此阶段被重命名。
+NODE_NAME="${SOFA_NODE_NAME:-}"
+if [[ -z "$NODE_NAME" ]]; then
+  read -r -p '请输入 Provider 名称（例如 us-dmit）：' NODE_NAME
+fi
+[[ "$NODE_NAME" =~ ^[a-z]{2}-[a-z0-9]+(-[a-z0-9]+)*$ ]] || fail 'Provider 名称格式错误，例如 us-dmit。'
+PUBLIC_IP=$(curl -fsS --max-time 10 -4 https://api.ipify.org) || fail '无法获取 VPS 公网 IPv4。'
+PROVIDER_URL="http://${PUBLIC_IP}:${PORT}/subscribe/${TOKEN}/proxies"
+TMP_TEMPLATE=$(mktemp)
+trap 'rm -f "$TMP_TEMPLATE"' EXIT
+curl -fsSL --retry 3 "$TEMPLATE_URL" -o "$TMP_TEMPLATE" || fail '下载 Clash 模板失败。'
+NODE_NAME="$NODE_NAME" PROVIDER_URL="$PROVIDER_URL" TEMPLATE="$TMP_TEMPLATE" OUTPUT="$CLASH" python3 - <<'PY_TEMPLATE'
+import os, pathlib, tempfile
+template=pathlib.Path(os.environ["TEMPLATE"]).read_text(encoding="utf-8")
+assert template.count("NODE_NAME")==3, "模板中 NODE_NAME 数量异常"
+assert template.count("PROXY_PROVIDERS_URL")==1, "模板中订阅地址占位符数量异常"
+result=template.replace("NODE_NAME",os.environ["NODE_NAME"]).replace("PROXY_PROVIDERS_URL",os.environ["PROVIDER_URL"])
+out=pathlib.Path(os.environ["OUTPUT"])
+with tempfile.NamedTemporaryFile(mode="w",encoding="utf-8",dir=out.parent,delete=False) as f:
+    f.write(result)
+    tmp=f.name
+os.chmod(tmp,0o600)
+os.replace(tmp,out)
+PY_TEMPLATE
+setfacl -m u:www-data:r-- "$CLASH"
+# ========== 03A. 结束 ==========
 
 # ========== 04. 生成 Quick Tunnel 域名更新脚本 ==========
 # 运行安装器时，将其写入 /etc/sing-box/scripts/update-quicktunnel.sh。
@@ -119,6 +149,17 @@ cat > "$NGINX_DIR/subscription.conf" <<CONF
 server {
     listen ${PORT};
     server_name _;
+    location = /subscribe/${TOKEN}/proxies {
+        alias ${PROXIES};
+        default_type text/yaml;
+        add_header Cache-Control "no-store" always;
+    }
+    location = /subscribe/${TOKEN}/clash {
+        alias ${CLASH};
+        default_type text/yaml;
+        add_header Cache-Control "no-store" always;
+    }
+    # 兼容此前已导入的旧节点订阅 URL。
     location = /subscribe/${TOKEN} {
         alias ${PROXIES};
         default_type text/yaml;
@@ -177,8 +218,14 @@ fi
 # ========== 09. 本地验证订阅服务并输出地址 ==========
 STATUS=$(curl --noproxy '*' -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${PORT}/subscribe/${TOKEN}" || true)
 [[ "$STATUS" == 200 ]] || fail "订阅 URL 本地检查失败（HTTP $STATUS）。"
-IP=$(hostname -I | awk '{print $1}')
-info '安装完成。HTTP 订阅包含敏感凭据，请勿公开分享 URL：'
-printf 'http://%s:%s/subscribe/%s\n' "${IP:-VPS_IP}" "$PORT" "$TOKEN"
+CLASH_STATUS=$(curl --noproxy '*' -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${PORT}/subscribe/${TOKEN}/clash" || true)
+[[ "$CLASH_STATUS" == 200 ]] || fail "完整配置 URL 本地检查失败（HTTP $CLASH_STATUS）。"
+info '安装完成。以下 URL 包含敏感凭据，请勿公开分享：'
+printf '节点订阅： http://%s:%s/subscribe/%s/proxies\n' "$PUBLIC_IP" "$PORT" "$TOKEN"
+printf '完整配置： http://%s:%s/subscribe/%s/clash\n' "$PUBLIC_IP" "$PORT" "$TOKEN"
+if command -v qrencode >/dev/null 2>&1; then
+  info '完整配置订阅二维码：'
+  qrencode -t ANSIUTF8 "http://${PUBLIC_IP}:${PORT}/subscribe/${TOKEN}/clash"
+fi
 info '已自动配置 UFW 放行规则；如使用云平台防火墙，请确认相应 TCP 端口已放行。'
 # ========== 09. 结束 ==========
