@@ -108,11 +108,11 @@ dns:
 
 # ========== proxy providers ==========
 proxy-providers:
-  vps-us-vultr:
+  NODE_NAME:
     type: http
-    url: "http://45.76.68.180:18080/subscribe/dbed30ce9b9d4f1aa03ba112edf636775b34dae8b3ae2805"
+    url: "PROXY_PROVIDERS_URL"
     interval: 3600
-    path: ./proxy_providers/vps-us-vultr.yaml
+    path: ./proxy_providers/NODE_NAME.yaml
     health-check:
       enable: true
       url: https://www.gstatic.com/generate_204
@@ -129,9 +129,9 @@ proxy-groups:
     proxies:
       - DIRECT
     use:
-      - vps-us-vultr
+      - NODE_NAME
 
-# ========== rules ==========ß
+# ========== rules ==========
 rules:
   - RULE-SET,private_domain,DIRECT
   - RULE-SET,private_ip,DIRECT,no-resolve
