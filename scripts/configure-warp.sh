@@ -17,13 +17,22 @@ rm -f "$D/account.json.pending"
 if [[ ! -s $D/account.json || $mode == register ]]; then
   curl -fsSL --retry 2 --max-time 20 https://gitlab.com/fscarmen/warp/-/raw/main/api.sh -o "$tmp/api.sh" || fail '注册脚本下载失败'
   timeout 45 bash "$tmp/api.sh" --register > "$tmp/registration.json" || fail 'WARP 注册接口失败'
-  python3 - "$tmp/registration.json" "$tmp/account.json" <<'PY'
-import json,sys,os
+  python3 - "$tmp/registration.json" "$D/account.json" <<'PY'
+import base64,json,sys,os,ipaddress
 try:
  d=json.load(open(sys.argv[1]))
- v=d.get('v6') or d.get('address6');k=d.get('private_key');r=d.get('reserved')
- assert isinstance(v,str) and ':' in v and isinstance(k,str) and len(k)>20
+ # fscarmen api.sh --register：地址在 config.interface.addresses，
+ # reserved 来自 config.client_id（api.sh 已将其解码后写入 config.reserved）。
+ c=d['config']
+ v=c['interface']['addresses']['v6']
+ k=d['private_key']
+ r=c.get('reserved')
+ if r is None:
+  r=list(base64.b64decode(c['client_id'],validate=True))
+ assert isinstance(v,str) and ipaddress.ip_address(v.split('/')[0]).version==6
+ assert isinstance(k,str) and len(base64.b64decode(k,validate=True))==32
  assert isinstance(r,list) and len(r)==3 and all(type(x)==int and 0<=x<=255 for x in r)
+ assert d.get('warp_enabled') is True, 'WARP 未启用'
  with open(sys.argv[2]+'.pending','w') as f:json.dump({'v6':v,'private_key':k,'reserved':r},f)
  os.chmod(sys.argv[2]+'.pending',0o600)
 except Exception as e:sys.exit('注册响应无效: '+str(e))
