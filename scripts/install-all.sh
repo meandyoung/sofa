@@ -33,7 +33,19 @@ for name in install-singbox-nodes.sh install-mihomo-subscription.sh configure-wa
   bash -n "$work/$name" || fail "$name 语法检查失败，未执行安装。"
 done
 
-# 所有脚本通过语法检查后，才开始安装。
+# 所有脚本通过语法检查后，统一安装系统依赖。
+# APT 等待其他进程释放锁，最多 600 秒；不终止自动更新或删除锁文件。
+info '统一检查并安装系统依赖'
+export DEBIAN_FRONTEND=noninteractive
+apt-get -o DPkg::Lock::Timeout=600 update ||
+  fail 'APT 软件索引更新失败。'
+apt-get -o DPkg::Lock::Timeout=600 install -y curl ca-certificates openssl python3 nginx tar gzip iproute2 ufw acl ||
+  fail '系统依赖安装失败。'
+for cmd in curl openssl python3 nginx tar gzip ip ufw setfacl; do
+  command -v "$cmd" >/dev/null 2>&1 || fail "缺少依赖：$cmd"
+done
+# 子脚本独立运行仍自行安装依赖；完整安装时跳过重复的 APT 操作。
+export SOFA_DEPS_READY=1
 info '开始安装 sing-box 五节点'
 bash "$work/install-singbox-nodes.sh" || fail '节点安装失败，订阅安装不会执行。'
 
