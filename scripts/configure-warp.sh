@@ -51,9 +51,35 @@ a=json.load(open(d+'/account.json.pending' if os.path.exists(d+'/account.json.pe
 ep={'type':'wireguard','tag':'warp-ep','mtu':1400,'address':['172.16.0.2/32',a['v6'].split('/')[0]+'/128'],'private_key':a['private_key'],'peers':[{'address':'engage.cloudflareclient.com','port':2408,'public_key':'bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=','allowed_ips':['0.0.0.0/0','::/0'],'reserved':a['reserved']}]}
 cfg=json.load(open(c));cfg['endpoints']=[x for x in cfg.get('endpoints',[]) if x.get('tag')!='warp-ep']+[ep]
 route=cfg.setdefault('route',{})
-# 只移除模块自身管理的旧规则；不触碰用户其他规则。
-route['rules']=[r for r in route.get('rules',[]) if r.get('outbound') not in ('warp-ep',) and r.get('domain_suffix')!=['openai.com','chatgpt.com']]
-route['rule_set']=[r for r in route.get('rule_set',[]) if not r.get('tag','').startswith('sofa-warp-')]
+# 以最近一次成功应用的 rules.json 为依据，整体替换本模块旧规则。
+# 仅删除与本模块上次生成内容完全相同的规则，不按 outbound 泛删用户规则。
+state=d+'/openai-outbound'
+choice=open(state).read().strip() if os.path.isfile(state) else 'direct'
+if choice not in ('direct','warp-ep'):choice='direct'
+previous_path=d+'/rules.json'
+previous=json.load(open(previous_path)) if os.path.isfile(previous_path) else None
+old=[]
+old_tags=set()
+if previous is not None:
+ for key,outbound in (('direct','direct'),('warp','warp-ep'),('auto',choice)):
+  if previous.get(key):old.append({'domain_suffix':previous[key],'action':'route','outbound':outbound})
+ for name in previous.get('rule_sets',{}):
+  tag='sofa-warp-'+name
+  old_tags.add(tag)
+  old.append({'rule_set':[tag],'action':'route','outbound':'warp-ep'})
+else:
+ # 兼容首次安装及旧版本默认规则；不删除其他未知规则。
+ old.append({'domain_suffix':['openai.com','chatgpt.com'],'action':'route','outbound':'direct'})
+ old.append({'domain_suffix':['openai.com','chatgpt.com'],'action':'route','outbound':'warp-ep'})
+# 删除每一条旧规则至多一次，避免误删用户恰好相同的重复规则。
+existing=list(route.get('rules',[]))
+for managed in old:
+ for i,item in enumerate(existing):
+  if item==managed:
+   existing.pop(i)
+   break
+route['rules']=existing
+route['rule_set']=[item for item in route.get('rule_set',[]) if item.get('tag') not in old_tags]
 new=[]
 if rules['direct']:new.append({'domain_suffix':rules['direct'],'action':'route','outbound':'direct'})
 if rules['warp']:new.append({'domain_suffix':rules['warp'],'action':'route','outbound':'warp-ep'})
