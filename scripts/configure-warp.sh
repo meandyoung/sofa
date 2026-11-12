@@ -11,8 +11,9 @@ if [[ $mode == status ]]; then cat "$D/status" 2>/dev/null || echo not-configure
 case "$mode" in install|register|apply) ;; *) fail '用法：install | register | apply 规则文件 | status' ;; esac
 tmp=$(mktemp -d "$D/.work.XXXXXX")
 pid=''
-cleanup(){ if [[ -n $pid ]]; then kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; fi; rm -rf "$tmp"; }
+cleanup(){ if [[ -n $pid ]]; then kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; fi; rm -f "$D/account.json.pending"; rm -rf "$tmp"; }
 trap cleanup EXIT
+rm -f "$D/account.json.pending"
 if [[ ! -s $D/account.json || $mode == register ]]; then
   curl -fsSL --retry 2 --max-time 20 https://gitlab.com/fscarmen/warp/-/raw/main/api.sh -o "$tmp/api.sh" || fail '注册脚本下载失败'
   timeout 45 bash "$tmp/api.sh" --register > "$tmp/registration.json" || fail 'WARP 注册接口失败'
