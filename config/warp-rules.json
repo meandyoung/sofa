@@ -3,7 +3,9 @@
     "openai.com",
     "chatgpt.com"
   ],
-  "warp": [],
+  "warp": [
+    "cloudflare.com"
+  ],
   "direct": [],
   "rule_sets": {}
 }
