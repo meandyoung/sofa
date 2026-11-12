@@ -42,9 +42,9 @@ info '统一检查并安装系统依赖'
 export DEBIAN_FRONTEND=noninteractive
 apt-get -o DPkg::Lock::Timeout=600 update ||
   fail 'APT 软件索引更新失败。'
-apt-get -o DPkg::Lock::Timeout=600 install -y curl ca-certificates openssl python3 nginx tar gzip iproute2 ufw acl ||
+apt-get -o DPkg::Lock::Timeout=600 install -y curl ca-certificates openssl python3 nginx tar gzip iproute2 ufw acl qrencode ||
   fail '系统依赖安装失败。'
-for cmd in curl openssl python3 nginx tar gzip ip ufw setfacl; do
+for cmd in curl openssl python3 nginx tar gzip ip ufw setfacl qrencode; do
   command -v "$cmd" >/dev/null 2>&1 || fail "缺少依赖：$cmd"
 done
 # 子脚本独立运行仍自行安装依赖；完整安装时跳过重复的 APT 操作。
