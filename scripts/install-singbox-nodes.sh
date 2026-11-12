@@ -35,8 +35,11 @@ for p in "$REALITY_PORT/tcp" "$HY2_PORT/udp" "$ANYTLS_PORT/tcp" "$SHADOWTLS_PORT
     fail "端口 $port 可能已被占用，请检查现有服务"
   fi
 done
-apt-get update
-apt-get install -y curl ca-certificates openssl python3 nginx tar gzip iproute2 ufw acl
+if [[ "${SOFA_DEPS_READY:-0}" != 1 ]]; then
+  # 单独运行时补装依赖，等待 APT 锁释放。
+  apt-get -o DPkg::Lock::Timeout=600 update
+  apt-get -o DPkg::Lock::Timeout=600 install -y curl ca-certificates openssl python3 nginx tar gzip iproute2 ufw acl
+fi
 arch=$(dpkg --print-architecture)
 case "$arch" in amd64|arm64) ;; *) fail "不支持架构 $arch";; esac
 work=$(mktemp -d)
