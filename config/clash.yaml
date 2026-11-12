@@ -1,0 +1,157 @@
+# ============================================================
+# Version: 0.1
+# 此版本为单VPS模板
+# 面向 Clash Verge / Mihomo
+# 目前适配Mac版本
+# 需要安装脚本引导用户输入vps名称，用于provider名字，格式国家-vps运营商，比如：us-dmit
+# 订阅每小时更新
+# ============================================================
+
+# ========== YAML 锚点 ==========
+rule-anchor:
+  domain: &domain
+    type: http
+    interval: 86400
+    behavior: domain
+    format: mrs
+
+  domain_text: &domain_text
+    type: http
+    interval: 86400
+    behavior: domain
+    format: text
+
+  ip: &ip 
+    type: http
+    interval: 86400
+    behavior: ipcidr
+    format: mrs
+
+# ========== 基础设置 ==========
+mode: rule
+mixed-port: 7890
+ipv6: false
+
+allow-lan: false
+
+unified-delay: true
+tcp-concurrent: true
+log-level: info
+profile:
+  store-selected: true
+  store-fake-ip: true
+find-process-mode: strict
+
+# ========== TUN ==========
+tun:
+  enable: true
+  stack: mixed
+  dns-hijack: ["any:53", "tcp://any:53"]
+  auto-route: true
+  strict-route: false
+  auto-detect-interface: true
+
+# ========== sniffer ==========
+sniffer:
+  enable: true
+  override-destination: true
+  force-dns-mapping: false
+  parse-pure-ip: true
+  sniff:
+    HTTP:
+      ports: [80, 8080-8880]
+    TLS:
+      ports: [443, 8443]
+    QUIC:
+      ports: [443, 8443]
+  skip-domain:
+    - "Mijia Cloud"
+    - "dlg.io.mi.com"
+    - "+.push.apple.com"
+
+# ========== DNS ==========
+dns:
+  enable: true
+  cache-algorithm: arc
+  ipv6: false
+  
+  enhanced-mode: fake-ip
+  fake-ip-range: 198.18.0.0/16
+  fake-ip-filter-mode: blacklist
+  fake-ip-filter:
+    - rule-set:private_domain
+    - rule-set:fakeipfilter_cn
+    - rule-set:fakeipfilter_!cn
+
+  default-nameserver:
+    - 223.5.5.5
+    - 119.28.28.28
+    - 1.1.1.1
+  proxy-server-nameserver:
+    - https://dns.alidns.com/dns-query
+    - https://doh.pub/dns-query
+  direct-nameserver:
+    - https://dns.alidns.com/dns-query
+    - https://doh.pub/dns-query
+  nameserver:
+    - https://1.1.1.1/dns-query#节点选择
+    - https://8.8.8.8/dns-query#节点选择
+
+  nameserver-policy:
+    "rule-set:cn_domain,private_domain,fakeipfilter_cn,steamcn_domain,microsoftcn_domain,applecn_domain":
+    - https://dns.alidns.com/dns-query
+    - https://doh.pub/dns-query
+
+    "rule-set:fakeipfilter_!cn":
+    - https://1.1.1.1/dns-query#节点选择
+    - https://8.8.8.8/dns-query#节点选择
+
+# ========== proxy providers ==========
+proxy-providers:
+  vps-us-vultr:
+    type: http
+    url: "http://45.76.68.180:18080/subscribe/dbed30ce9b9d4f1aa03ba112edf636775b34dae8b3ae2805"
+    interval: 3600
+    path: ./proxy_providers/vps-us-vultr.yaml
+    health-check:
+      enable: true
+      url: https://www.gstatic.com/generate_204
+      interval: 300
+
+
+# ========== proxies ==========
+proxies:
+
+# ========== proxy-groups ==========
+proxy-groups:
+  - name: 节点选择
+    type: select
+    proxies:
+      - DIRECT
+    use:
+      - vps-us-vultr
+
+# ========== rules ==========ß
+rules:
+  - RULE-SET,private_domain,DIRECT
+  - RULE-SET,private_ip,DIRECT,no-resolve
+
+  - RULE-SET,cn_domain,DIRECT
+  - RULE-SET,cn_ip,DIRECT,no-resolve
+
+  - MATCH,节点选择
+
+# ========== rule-providers ==========
+rule-providers:
+  fakeipfilter_cn: {<<: *domain_text, url: "https://raw.githubusercontent.com/qichiyuhub/rule/refs/heads/main/rules/fakeipfilter-cn.list"}
+  fakeipfilter_!cn: {<<: *domain_text, url: "https://raw.githubusercontent.com/qichiyuhub/rule/refs/heads/main/rules/fakeipfilter-!cn.list"}
+  private_domain: {<<: *domain, url: "https://github.com/MetaCubeX/meta-rules-dat/raw/refs/heads/meta/geo/geosite/private.mrs"}
+ 
+  microsoftcn_domain: {<<: *domain, url: "https://github.com/MetaCubeX/meta-rules-dat/raw/refs/heads/meta/geo/geosite/microsoft@cn.mrs"}
+  applecn_domain: {<<: *domain, url: "https://github.com/MetaCubeX/meta-rules-dat/raw/refs/heads/meta/geo/geosite/apple@cn.mrs"}
+  steamcn_domain: {<<: *domain, url: "https://github.com/MetaCubeX/meta-rules-dat/raw/refs/heads/meta/geo/geosite/steam@cn.mrs"}
+
+  cn_domain: {<<: *domain, url: "https://github.com/MetaCubeX/meta-rules-dat/raw/refs/heads/meta/geo/geosite/cn.mrs"}
+
+  cn_ip: {<<: *ip, url: "https://github.com/MetaCubeX/meta-rules-dat/raw/refs/heads/meta/geo/geoip/cn.mrs"}
+  private_ip: {<<: *ip, url: "https://github.com/MetaCubeX/meta-rules-dat/raw/refs/heads/meta/geo/geoip/private.mrs"}
