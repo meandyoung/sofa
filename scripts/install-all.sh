@@ -13,6 +13,14 @@ info() { printf '[INFO] %s\n' "$*"; }
   fail '检测到已有节点配置；此脚本仅用于全新部署，不会覆盖现有配置。'
 command -v curl >/dev/null 2>&1 || fail '缺少 curl，请先安装 curl。'
 
+# 安装时统一指定 Provider 和节点名前缀。
+if [[ -z "${SOFA_NODE_NAME:-}" ]]; then
+  read -r -p '请输入 VPS 名称（国家-运营商，例如 us-dmit）：' SOFA_NODE_NAME
+fi
+[[ "$SOFA_NODE_NAME" =~ ^[a-z]{2}-[a-z0-9]+(-[a-z0-9]+)*$ ]] ||
+  fail '名称格式错误，例如 us-dmit。'
+export SOFA_NODE_NAME
+
 # 临时下载安装器，退出时自动清理。
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
