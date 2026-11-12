@@ -113,6 +113,7 @@ proxy-providers:
   NODE_NAME:
     type: http
     url: "PROXY_PROVIDERS_URL"
+    proxy: DIRECT
     interval: 3600
     path: ./proxy_providers/NODE_NAME.yaml
     health-check:
