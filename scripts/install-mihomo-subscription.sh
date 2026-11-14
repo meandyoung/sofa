@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 安装 Mihomo HTTP 订阅发布与 Quick Tunnel 域名自动更新模块（单文件安装器）
+# 安装 Mihomo HTTP/HTTPS 订阅内容及 Quick Tunnel 自动更新模块
 set -Eeuo pipefail
 
 # ========== 01. 基础路径和参数 ==========
@@ -12,6 +12,8 @@ PROXIES="$SUB_DIR/proxies"
 CLASH="$SUB_DIR/clash.yaml"
 TEMPLATE_URL="https://raw.githubusercontent.com/meandyoung/sofa/main/config/clash.yaml"
 PORT="${SUBSCRIPTION_PORT:-18080}"
+MODE="${SOFA_SUB_MODE:-http}"
+[[ "$MODE" == http || "$MODE" == https ]] || { echo "无效订阅模式：$MODE" >&2; exit 1; }
 NGINX_LINK=/etc/nginx/conf.d/subscription.conf
 SERVICE_LINK=/etc/systemd/system/update-quicktunnel.service
 TIMER_LINK=/etc/systemd/system/update-quicktunnel.timer
@@ -24,13 +26,17 @@ info() { echo "[INFO] $*"; }
 [[ $# -eq 0 ]] || fail "用法：bash $0（无需参数）"
 [[ -s "$PROXIES" ]] || fail "缺少 $PROXIES；请先部署节点并生成 Mihomo proxies 文件。"
 [[ "$PORT" =~ ^[0-9]+$ ]] && (( PORT >= 1024 && PORT <= 65535 )) || fail '端口必须在 1024–65535 范围内。'
-# 如果缺少 setfacl，自动安装 acl 软件包
-if ! command -v setfacl >/dev/null 2>&1; then
-  info "正在安装 acl 软件包..."
+# 独立运行时也检查并补齐依赖。
+missing=()
+for pkg in nginx python3 openssl curl acl ufw qrencode; do
+  case "$pkg" in openssl) bin=openssl;; acl) bin=setfacl;; *) bin="$pkg";; esac
+  command -v "$bin" >/dev/null 2>&1 || missing+=("$pkg")
+done
+if (( ${#missing[@]} )); then
   apt-get -o DPkg::Lock::Timeout=600 update -qq
-  DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=600 install -y acl
+  DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=600 install -y "${missing[@]}"
 fi
-for cmd in nginx python3 openssl curl setfacl systemctl journalctl getent; do
+for cmd in nginx python3 openssl curl setfacl systemctl journalctl getent qrencode; do
   command -v "$cmd" >/dev/null || fail "缺少依赖：$cmd"
 done
 getent passwd www-data >/dev/null || fail '缺少 www-data 用户。'
@@ -64,7 +70,12 @@ if [[ -z "$NODE_NAME" ]]; then
 fi
 [[ "$NODE_NAME" =~ ^[a-z]{2}-[a-z0-9]+(-[a-z0-9]+)*$ ]] || fail 'Provider 名称格式错误，例如 us-dmit。'
 PUBLIC_IP=$(curl -fsS --max-time 10 -4 https://api.ipify.org) || fail '无法获取 VPS 公网 IPv4。'
-PROVIDER_URL="http://${PUBLIC_IP}:${PORT}/subscribe/${TOKEN}/proxies"
+if [[ "$MODE" == https ]]; then
+  [[ -n "${SOFA_SUB_DOMAIN:-}" ]] || fail 'HTTPS 模式缺少 SOFA_SUB_DOMAIN'
+  PROVIDER_URL="https://${SOFA_SUB_DOMAIN}:${SOFA_HTTPS_PORT:-18443}/subscribe/${TOKEN}/proxies"
+else
+  PROVIDER_URL="http://${PUBLIC_IP}:${PORT}/subscribe/${TOKEN}/proxies"
+fi
 TMP_TEMPLATE=$(mktemp)
 trap 'rm -f "$TMP_TEMPLATE"' EXIT
 curl -fsSL --retry 3 "$TEMPLATE_URL" -o "$TMP_TEMPLATE" || fail '下载 Clash 模板失败。'
@@ -143,6 +154,7 @@ bash -n "$SCRIPT_DIR/update-quicktunnel.sh"
 
 # ========== 05. 生成 Nginx HTTP 订阅服务配置 ==========
 # 使用带随机 Token 的 URL 提供 proxies YAML 文件；其他路径返回 404。
+if [[ "$MODE" == http ]]; then
 cat > "$NGINX_DIR/subscription.conf" <<CONF
 server {
     listen ${PORT};
@@ -168,6 +180,7 @@ server {
 CONF
 chmod 644 "$NGINX_DIR/subscription.conf"
 ln -sfn "$NGINX_DIR/subscription.conf" "$NGINX_LINK"
+fi
 # ========== 05. 结束 ==========
 
 # ========== 06. 生成 systemd 更新服务和定时器 ==========
@@ -209,21 +222,25 @@ systemctl enable --now update-quicktunnel.timer
 # ========== 08. 自动配置 UFW 防火墙 ==========
 # 如果安装了 UFW，则放行 HTTP 订阅端口。
 if command -v ufw >/dev/null 2>&1; then
-  ufw allow "${PORT}/tcp" comment 'Mihomo HTTP Subscription'
+  if [[ "$MODE" == http ]]; then ufw allow "${PORT}/tcp" comment 'Mihomo HTTP Subscription'; fi
 fi
 # ========== 08. 结束 ==========
 
-# ========== 09. 本地验证订阅服务并输出地址 ==========
-STATUS=$(curl --noproxy '*' -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${PORT}/subscribe/${TOKEN}" || true)
-[[ "$STATUS" == 200 ]] || fail "订阅 URL 本地检查失败（HTTP $STATUS）。"
-CLASH_STATUS=$(curl --noproxy '*' -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${PORT}/subscribe/${TOKEN}/clash" || true)
-[[ "$CLASH_STATUS" == 200 ]] || fail "完整配置 URL 本地检查失败（HTTP $CLASH_STATUS）。"
-info '安装完成。以下 URL 包含敏感凭据，请勿公开分享：'
-printf '节点订阅： http://%s:%s/subscribe/%s/proxies\n' "$PUBLIC_IP" "$PORT" "$TOKEN"
-printf '完整配置： http://%s:%s/subscribe/%s/clash\n' "$PUBLIC_IP" "$PORT" "$TOKEN"
-if command -v qrencode >/dev/null 2>&1; then
-  info '完整配置订阅二维码：'
-  qrencode -t ANSIUTF8 "http://${PUBLIC_IP}:${PORT}/subscribe/${TOKEN}/clash"
+# ========== 09. 验证及订阅输出 ==========
+if [[ "$MODE" == http ]]; then
+  STATUS=$(curl --noproxy '*' -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${PORT}/subscribe/${TOKEN}/proxies" || true)
+  [[ "$STATUS" == 200 ]] || fail "HTTP 节点订阅检查失败（$STATUS）"
+  STATUS=$(curl --noproxy '*' -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${PORT}/subscribe/${TOKEN}/clash" || true)
+  [[ "$STATUS" == 200 ]] || fail "HTTP 完整订阅检查失败（$STATUS）"
+  URL="http://${PUBLIC_IP}:${PORT}/subscribe/${TOKEN}"
+else
+  URL="https://${SOFA_SUB_DOMAIN}:${SOFA_HTTPS_PORT:-18443}/subscribe/${TOKEN}"
 fi
-info '已自动配置 UFW 放行规则；如使用云平台防火墙，请确认相应 TCP 端口已放行。'
-# ========== 09. 结束 ==========
+if [[ "${SOFA_SUPPRESS_SUB_OUTPUT:-0}" != 1 ]]; then
+  printf '\n节点订阅地址：\n%s/proxies\n\n完整配置订阅地址：\n%s/clash\n\n完整配置订阅二维码：\n' "$URL" "$URL"
+  if [[ "$MODE" == http ]]; then
+    qrencode -t ANSIUTF8 "$URL/clash"
+  else
+    info 'HTTPS 模式请先运行 configure-subscription-https.sh 完成服务配置后再使用二维码。'
+  fi
+fi
