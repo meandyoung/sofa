@@ -11,8 +11,7 @@ fail(){ echo "[ERROR] $*" >&2; exit 1; }
 [[ -s "$SOURCE" ]] && grep -q '^proxies:' "$SOURCE" || fail "请先通过 fscarmen 生成 $SOURCE"
 [[ -s "$BASE/sb.sh" ]] || fail '未检测到 fscarmen 安装'
 command -v apt-get >/dev/null || fail '仅支持 Debian/Ubuntu'
-install -d -m 755 "$SOFA" "$SOFA/www" "$SOFA/logs"
-install -d -m 700 "$SOFA/secrets"
+install -d -m 755 "$SOFA" "$SOFA/www"
 if [[ -s "$SOFA/domain" ]]; then DOMAIN=$(cat "$SOFA/domain"); else
   while :; do
     read -r -p 'HTTPS 订阅域名：' DOMAIN
@@ -27,19 +26,19 @@ if [[ -s "$SOFA/provider-name" ]]; then PROVIDER=$(cat "$SOFA/provider-name"); e
     [[ "$PROVIDER" =~ ^[a-z]{2}-[a-z0-9]+(-[a-z0-9]+)*$ ]] && break
   done
 fi
-if [[ ! -s "$SOFA/secrets/cloudflare.ini" ]]; then
+if [[ ! -s "$SOFA/cloudflare.ini" ]]; then
   read -r -s -p 'Cloudflare API Token：' CF_TOKEN
   printf '\n'
   [[ -n "$CF_TOKEN" ]] || fail 'Token 不能为空'
-  (umask 077; printf 'dns_cloudflare_api_token = %s\n' "$CF_TOKEN" > "$SOFA/secrets/cloudflare.ini")
+  (umask 077; printf 'dns_cloudflare_api_token = %s\n' "$CF_TOKEN" > "$SOFA/cloudflare.ini")
   unset CF_TOKEN
 fi
-chmod 600 "$SOFA/secrets/cloudflare.ini"
+chmod 600 "$SOFA/cloudflare.ini"
 export DEBIAN_FRONTEND=noninteractive
 apt-get -o DPkg::Lock::Timeout=600 update -qq
 apt-get -o DPkg::Lock::Timeout=600 install -y nginx certbot python3-certbot-dns-cloudflare curl python3 openssl qrencode
 IP=$(curl --noproxy '*' -4fsS --max-time 10 https://api.ipify.org) || fail '无法获取公网 IPv4'
-CF_TOKEN=$(sed -n 's/^dns_cloudflare_api_token = //p' "$SOFA/secrets/cloudflare.ini" | head -1)
+CF_TOKEN=$(sed -n 's/^dns_cloudflare_api_token = //p' "$SOFA/cloudflare.ini" | head -1)
 CF_TOKEN="$CF_TOKEN" DOMAIN="$DOMAIN" IP="$IP" python3 - <<'PY'
 import os,json,urllib.request,sys
 domain=os.environ['DOMAIN'].lower();ip=os.environ['IP']
@@ -74,7 +73,7 @@ CERT=/etc/letsencrypt/live/$DOMAIN/fullchain.pem
 KEY=/etc/letsencrypt/live/$DOMAIN/privkey.pem
 if [[ ! -s "$CERT" || ! -s "$KEY" ]] || ! openssl x509 -checkend 2592000 -noout -in "$CERT" >/dev/null 2>&1; then
   certbot certonly --non-interactive --agree-tos --register-unsafely-without-email \
-    --dns-cloudflare --dns-cloudflare-credentials "$SOFA/secrets/cloudflare.ini" \
+    --dns-cloudflare --dns-cloudflare-credentials "$SOFA/cloudflare.ini" \
     --dns-cloudflare-propagation-seconds 60 -d "$DOMAIN" || fail '证书申请失败'
 fi
 [[ -s "$SOFA/token" ]] || (umask 077; openssl rand -hex 24 > "$SOFA/token")
@@ -113,11 +112,11 @@ chmod 755 "$SOFA/sync.sh"
 bash "$SOFA/sync.sh" || fail '生成订阅失败'
 cat > "$SOFA/nginx.conf" <<CONF
 worker_processes 1;
-pid $SOFA/nginx.pid;
-error_log $SOFA/logs/nginx-error.log warn;
+pid /run/sofa-nginx.pid;
+error_log stderr warn;
 events { worker_connections 256; }
 http {
-  access_log $SOFA/logs/nginx-access.log;
+  access_log off;
   server {
     listen $PORT ssl;
     server_name $DOMAIN;
@@ -139,13 +138,13 @@ http {
 }
 CONF
 nginx -t -c "$SOFA/nginx.conf" || fail 'Nginx 配置错误'
-cat > "$SOFA/sofa-https.service" <<SERVICE
+cat > "/etc/systemd/system/sofa-https.service" <<SERVICE
 [Unit]
 Description=Sofa HTTPS subscriptions
 After=network-online.target
 [Service]
 Type=forking
-PIDFile=$SOFA/nginx.pid
+PIDFile=/run/sofa-nginx.pid
 ExecStart=/usr/sbin/nginx -c $SOFA/nginx.conf
 ExecReload=/usr/sbin/nginx -s reload -c $SOFA/nginx.conf
 ExecStop=/usr/sbin/nginx -s quit -c $SOFA/nginx.conf
@@ -153,14 +152,14 @@ Restart=on-failure
 [Install]
 WantedBy=multi-user.target
 SERVICE
-cat > "$SOFA/sofa-sync.service" <<SERVICE
+cat > "/etc/systemd/system/sofa-sync.service" <<SERVICE
 [Unit]
 Description=Sync Sofa subscriptions
 [Service]
 Type=oneshot
 ExecStart=/bin/bash $SOFA/sync.sh
 SERVICE
-cat > "$SOFA/sofa-sync.timer" <<'TIMER'
+cat > "/etc/systemd/system/sofa-sync.timer" <<'TIMER'
 [Unit]
 Description=Sync Sofa subscriptions periodically
 [Timer]
@@ -170,20 +169,19 @@ Unit=sofa-sync.service
 [Install]
 WantedBy=timers.target
 TIMER
-ln -sfn "$SOFA/sofa-https.service" /etc/systemd/system/sofa-https.service
-ln -sfn "$SOFA/sofa-sync.service" /etc/systemd/system/sofa-sync.service
-ln -sfn "$SOFA/sofa-sync.timer" /etc/systemd/system/sofa-sync.timer
+ln -sfn "/etc/systemd/system/sofa-https.service" /etc/systemd/system/sofa-https.service
+ln -sfn "/etc/systemd/system/sofa-sync.service" /etc/systemd/system/sofa-sync.service
+ln -sfn "/etc/systemd/system/sofa-sync.timer" /etc/systemd/system/sofa-sync.timer
 systemctl daemon-reload
 systemctl enable --now sofa-https.service sofa-sync.timer
 systemctl restart sofa-https.service
-cat > "$SOFA/reload-after-renewal.sh" <<'HOOK'
+install -d -m 755 /etc/letsencrypt/renewal-hooks/deploy
+cat > /etc/letsencrypt/renewal-hooks/deploy/sofa-reload.sh <<'HOOK'
 #!/usr/bin/env bash
 set -e
 systemctl reload sofa-https.service
 HOOK
-chmod 755 "$SOFA/reload-after-renewal.sh"
-install -d -m 755 /etc/letsencrypt/renewal-hooks/deploy
-ln -sfn "$SOFA/reload-after-renewal.sh" /etc/letsencrypt/renewal-hooks/deploy/sofa-reload.sh
+chmod 755 /etc/letsencrypt/renewal-hooks/deploy/sofa-reload.sh
 systemctl enable --now certbot.timer || true
 if command -v ufw >/dev/null; then ufw allow "$PORT/tcp" comment 'Sofa HTTPS Subscription'; fi
 URL=https://$DOMAIN:$PORT/subscribe/$TOKEN
