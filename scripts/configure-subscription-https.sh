@@ -52,8 +52,7 @@ def get(path):
     req=urllib.request.Request('https://api.cloudflare.com/client/v4/'+path,headers={'Authorization':'Bearer '+token,'Content-Type':'application/json'})
     with urllib.request.urlopen(req,timeout=15) as r: return json.load(r)
 try:
-    result=get('user/tokens/verify')
-    if not result.get('success'): raise ValueError('Token 无效')
+    # Account API Token 不适用 /user/tokens/verify；直接验证实际所需的 Zone/DNS 访问。
     labels=domain.split('.'); zone=None
     for i in range(1,len(labels)):
         candidate='.'.join(labels[i:])
@@ -61,13 +60,13 @@ try:
         if r.get('success') and r.get('result'):
             zone=r['result'][0]; break
     if zone is None: raise ValueError('无法读取域名所属 Zone，请检查 Zone Read 权限')
-    r=get('zones/'+zone['id']+'/dns_records?type=A&name='+domain)
-    if not r.get('success'): raise ValueError('无法读取 DNS 记录')
     ip=urllib.request.urlopen('https://api.ipify.org',timeout=10).read().decode().strip()
-    records=get('zones/'+zone['id']+'/dns_records?name='+domain).get('result',[])
+    dns_response=get('zones/'+zone['id']+'/dns_records?name='+domain)
+    if not dns_response.get('success'): raise ValueError('无法读取 DNS 记录，请检查 DNS 权限')
+    records=dns_response.get('result',[])
     if records and (len(records)!=1 or records[0]['type']!='A' or records[0]['content']!=ip or records[0].get('proxied')):
         raise ValueError('DNS 记录与当前 VPS 不一致，拒绝覆盖')
-    print('[INFO] Cloudflare Token、Zone、DNS 读取及记录冲突检查通过')
+    print('[INFO] Cloudflare Zone、DNS 读取及记录冲突检查通过（兼容 Account API Token）')
 except Exception as e:
     print('[ERROR] Cloudflare 预检查失败：'+str(e),file=sys.stderr)
     sys.exit(1)
