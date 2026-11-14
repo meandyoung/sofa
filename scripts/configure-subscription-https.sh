@@ -63,7 +63,11 @@ try:
     if zone is None: raise ValueError('无法读取域名所属 Zone，请检查 Zone Read 权限')
     r=get('zones/'+zone['id']+'/dns_records?type=A&name='+domain)
     if not r.get('success'): raise ValueError('无法读取 DNS 记录')
-    print('[INFO] Cloudflare Token、Zone 和 DNS 读取检查通过')
+    ip=urllib.request.urlopen('https://api.ipify.org',timeout=10).read().decode().strip()
+    records=get('zones/'+zone['id']+'/dns_records?name='+domain).get('result',[])
+    if records and (len(records)!=1 or records[0]['type']!='A' or records[0]['content']!=ip or records[0].get('proxied')):
+        raise ValueError('DNS 记录与当前 VPS 不一致，拒绝覆盖')
+    print('[INFO] Cloudflare Token、Zone、DNS 读取及记录冲突检查通过')
 except Exception as e:
     print('[ERROR] Cloudflare 预检查失败：'+str(e),file=sys.stderr)
     sys.exit(1)
