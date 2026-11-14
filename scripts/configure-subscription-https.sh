@@ -23,16 +23,20 @@ if ! command -v curl >/dev/null || ! command -v python3 >/dev/null; then
 fi
 # 独立运行时询问域名；主安装器传入域名时不重复询问。
 if [[ -z "$DOMAIN" && -s "$DOMAIN_FILE" ]]; then DOMAIN=$(<"$DOMAIN_FILE"); fi
-while :; do
-  if [[ -z "$DOMAIN" ]]; then read -r -p '请输入完整 HTTPS 订阅域名：' DOMAIN; fi
-  if [[ ! "$DOMAIN" =~ ^([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$ ]]; then
-    info '域名格式不正确，请重新输入。'; DOMAIN=''; continue
-  fi
-  printf 'HTTPS 订阅域名：%s\n' "$DOMAIN"
-  read -r -p '确认无误请按回车，输入其他内容重新输入：' answer
-  [[ -z "$answer" ]] && break
-  DOMAIN=''
-done
+if [[ "${SOFA_DOMAIN_CONFIRMED:-0}" == 1 ]]; then
+  [[ -n "$DOMAIN" && "$DOMAIN" =~ ^([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?\\.)+[a-zA-Z]{2,}$ ]] || fail '已确认的域名格式无效'
+else
+  while :; do
+    if [[ -z "$DOMAIN" ]]; then read -r -p '请输入完整 HTTPS 订阅域名：' DOMAIN; fi
+    if [[ ! "$DOMAIN" =~ ^([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?\\.)+[a-zA-Z]{2,}$ ]]; then
+      info '域名格式不正确，请重新输入。'; DOMAIN=''; continue
+    fi
+    printf 'HTTPS 订阅域名：%s\\n' "$DOMAIN"
+    read -r -p '确认无误请按回车，输入其他内容重新输入：' answer
+    [[ -z "$answer" ]] && break
+    DOMAIN=''
+  done
+fi
 # 只接受完整的 Cloudflare DNS Token，不输出密钥。
 if [[ ! -s "$CREDENTIALS" || "${SOFA_REENTER_CF_TOKEN:-0}" == 1 ]]; then
   read -r -s -p '请输入 Cloudflare API Token：' CF_TOKEN
