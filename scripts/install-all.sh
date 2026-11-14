@@ -137,7 +137,7 @@ export SOFA_DEPS_READY=1
 info '开始安装 sing-box 五节点'
 bash "$work/install-singbox-nodes.sh" || fail '节点安装失败，订阅安装不会执行。'
 
-install -d -m 755 /usr/local/libexec/sofa
+install -d -m 755 /usr/local/libexec/sofa "$BASE/scripts"
 install -m 755 "$work/configure-warp.sh" /usr/local/libexec/sofa/configure-warp.sh
 install -m 755 "$work/sync-config.sh" /usr/local/libexec/sofa/sync-config.sh
 install -m 755 "$work/configure-subscription-https.sh" "$BASE/scripts/configure-subscription-https.sh"
