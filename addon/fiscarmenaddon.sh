@@ -11,6 +11,23 @@ fail(){ echo "[ERROR] $*" >&2; exit 1; }
 [[ -s "$SOURCE" ]] && grep -q '^proxies:' "$SOURCE" || fail "请先通过 fscarmen 生成 $SOURCE"
 [[ -s "$BASE/sb.sh" ]] || fail '未检测到 fscarmen 安装'
 command -v apt-get >/dev/null || fail '仅支持 Debian/Ubuntu'
+# 检查 HTTPS 端口；已有 Sofa 服务允许更新，其他占用则停止。
+if command -v ss >/dev/null 2>&1 && ss -H -ltn "( sport = :$PORT )" | grep -q .; then
+  systemctl is-active --quiet sofa-https.service || fail "TCP $PORT 已被占用"
+  echo "[INFO] TCP $PORT 已占用（Sofa 服务正在运行）"
+else
+  echo "[INFO] TCP $PORT 未占用"
+fi
+# 检查本机防火墙；安装阶段会自动添加 UFW 放行规则。
+if command -v ufw >/dev/null 2>&1 && ufw status | grep -q '^Status: active'; then
+  if ufw status | grep -Eq "(^|[[:space:]])$PORT/tcp[[:space:]]+ALLOW"; then
+    echo "[INFO] UFW 已放行 TCP $PORT"
+  else
+    echo "[INFO] UFW 未放行 TCP $PORT，安装时自动添加"
+  fi
+else
+  echo "[INFO] UFW 未启用；云服务商安全组须允许 TCP $PORT 入站"
+fi
 install -d -m 755 "$SOFA" "$SOFA/www"
 if [[ -s "$SOFA/domain" ]]; then DOMAIN=$(cat "$SOFA/domain"); else
   while :; do
@@ -169,9 +186,6 @@ Unit=sofa-sync.service
 [Install]
 WantedBy=timers.target
 TIMER
-ln -sfn "/etc/systemd/system/sofa-https.service" /etc/systemd/system/sofa-https.service
-ln -sfn "/etc/systemd/system/sofa-sync.service" /etc/systemd/system/sofa-sync.service
-ln -sfn "/etc/systemd/system/sofa-sync.timer" /etc/systemd/system/sofa-sync.timer
 systemctl daemon-reload
 systemctl enable --now sofa-https.service sofa-sync.timer
 systemctl restart sofa-https.service
