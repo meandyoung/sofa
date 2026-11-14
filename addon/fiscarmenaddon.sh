@@ -8,6 +8,51 @@ PORT=18443
 TEMPLATE=https://raw.githubusercontent.com/meandyoung/sofa/main/config/clash.yaml
 fail(){ echo "[ERROR] $*" >&2; exit 1; }
 [[ $EUID -eq 0 ]] || fail '请使用 root 运行'
+
+install_show_command() {
+  local command_path=/usr/local/bin/sofa
+  if [[ -e "$command_path" || -L "$command_path" ]]; then
+    grep -Fxq '# Sofa fscarmen HTTPS subscription command' "$command_path" ||
+      fail "$command_path 已被其他程序占用"
+  fi
+
+  local tmp
+  tmp=$(mktemp)
+  cat > "$tmp" <<'SHOW'
+#!/usr/bin/env bash
+# Sofa fscarmen HTTPS subscription command
+set -euo pipefail
+sofa_dir=/etc/sing-box/sofa
+if [[ ! -r "$sofa_dir/domain" || ! -r "$sofa_dir/token" ]]; then
+  printf '%s\n' '无法读取 HTTPS 订阅配置。请以 root 运行，或使用 sudo sofa。' >&2
+  exit 1
+fi
+domain=$(cat "$sofa_dir/domain")
+token=$(cat "$sofa_dir/token")
+if [[ -z "$domain" || ! "$token" =~ ^[a-f0-9]{48}$ ]]; then
+  printf '%s\n' 'HTTPS 订阅域名或令牌无效。' >&2
+  exit 1
+fi
+
+url="https://$domain:18443/subscribe/$token"
+printf '\n节点订阅：\n%s/proxies\n\n完整配置订阅：\n%s/clash\n\n完整配置二维码：\n' "$url" "$url"
+qrencode -t ANSIUTF8 "$url/clash"
+SHOW
+  if ! install -m 755 "$tmp" "$command_path"; then
+    rm -f "$tmp"
+    fail "无法安装 $command_path"
+  fi
+  rm -f "$tmp"
+}
+
+if [[ "${1:-}" == --install-command ]]; then
+  [[ -s "$SOFA/domain" && -s "$SOFA/token" ]] || fail '请先安装 Sofa HTTPS 订阅'
+  command -v qrencode >/dev/null || fail '缺少二维码工具 qrencode'
+  install_show_command
+  printf '%s\n' '已安装。运行 sofa 查看 HTTPS 订阅和二维码。'
+  exit 0
+fi
+
 [[ -s "$SOURCE" ]] && grep -q '^proxies:' "$SOURCE" || fail "请先通过 fscarmen 生成 $SOURCE"
 [[ -s "$BASE/sb.sh" ]] || fail '未检测到 fscarmen 安装'
 command -v apt-get >/dev/null || fail '仅支持 Debian/Ubuntu'
@@ -201,5 +246,5 @@ if command -v ufw >/dev/null; then ufw allow "$PORT/tcp" comment 'Sofa HTTPS Sub
 URL=https://$DOMAIN:$PORT/subscribe/$TOKEN
 curl --noproxy '*' -fsS --resolve "$DOMAIN:$PORT:127.0.0.1" -o /dev/null "$URL/proxies" || fail 'HTTPS 节点订阅检查失败'
 curl --noproxy '*' -fsS --resolve "$DOMAIN:$PORT:127.0.0.1" -o /dev/null "$URL/clash" || fail 'HTTPS 完整订阅检查失败'
-printf '\n节点订阅：\n%s/proxies\n\n完整配置订阅：\n%s/clash\n\n完整配置二维码：\n' "$URL" "$URL"
-qrencode -t ANSIUTF8 "$URL/clash"
+install_show_command
+/usr/local/bin/sofa
