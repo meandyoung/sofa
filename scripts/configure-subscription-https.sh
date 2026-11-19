@@ -187,11 +187,6 @@ if updated!=s:
     os.chmod(tmp,0o600); os.replace(tmp,p)
 PY_URL
 fi
-# Nginx 需要能够读取目录和订阅文件；不修改原节点文件权限。
-if command -v setfacl >/dev/null; then
-  setfacl -m u:www-data:--x "$BASE" "$SUB_DIR"
-  setfacl -m u:www-data:r-- "$PROXIES_FILE" "$CLASH_FILE"
-fi
 PUBLIC_IP=$(curl -fsS --max-time 10 -4 https://api.ipify.org) || fail '无法获取 VPS 公网 IP'
 export DEBIAN_FRONTEND=noninteractive
 missing=()
@@ -201,6 +196,11 @@ done
 if (( ${#missing[@]} )); then
   apt-get -o DPkg::Lock::Timeout=600 update -qq
   apt-get -o DPkg::Lock::Timeout=600 install -y "${missing[@]}"
+fi
+# Nginx 需要能够读取目录和订阅文件；不修改原节点文件权限。
+if command -v setfacl >/dev/null; then
+  setfacl -m u:www-data:--x "$BASE" "$SUB_DIR"
+  setfacl -m u:www-data:r-- "$PROXIES_FILE" "$CLASH_FILE"
 fi
 # DNS 冲突检查：只创建不存在的 A 记录，不覆盖其他 VPS 的记录。
 CF_TOKEN=$(sed -n 's/^dns_cloudflare_api_token = //p' "$CREDENTIALS" | head -1)
