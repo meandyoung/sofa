@@ -12,7 +12,8 @@ HTTP_PORT="${SUBSCRIPTION_PORT:-18080}"
 SUB_DIR="$BASE/subscribe"
 TOKEN_FILE="$SUB_DIR/token-https"
 CLASH_FILE="$SUB_DIR/clash-https.yaml"
-TEMPLATE_URL="https://raw.githubusercontent.com/meandyoung/sofa/main/config/clash.yaml"
+TEMPLATE_API="https://api.github.com/repos/meandyoung/sofa/contents/config?ref=main"
+TEMPLATE_BASE="https://raw.githubusercontent.com/meandyoung/sofa/main/config"
 ACTION="${1:-install}"
 DOMAIN="${2:-${SOFA_SUB_DOMAIN:-}}"
 fail(){ echo "[ERROR] $*" >&2; exit 1; }
@@ -156,10 +157,46 @@ if (( GENERATE_CLASH )); then
     read -r -p '请输入 Provider 名称（例如 us-vmrack）：' SOFA_NODE_NAME
   fi
   [[ "$SOFA_NODE_NAME" =~ ^[a-z]{2}-[a-z0-9]+(-[a-z0-9]+)*$ ]] || fail 'Provider 名称格式错误'
+  # 实时列出 GitHub config 目录中的 YAML 文件，供安装者选择。
+  LIST_TMP=$(mktemp)
   TEMPLATE_TMP=$(mktemp)
   OUTPUT_TMP=$(mktemp "$SUB_DIR/.clash-https.XXXXXX")
-  trap 'rm -f "$TEMPLATE_TMP" "$OUTPUT_TMP"' EXIT
-  curl -fsSL --retry 3 "$TEMPLATE_URL" -o "$TEMPLATE_TMP" || fail 'GitHub YAML 模板下载失败'
+  trap 'rm -f "$LIST_TMP" "$TEMPLATE_TMP" "$OUTPUT_TMP"' EXIT
+  curl -fsSL --retry 3 --connect-timeout 10 --max-time 30 \
+    -H 'Accept: application/vnd.github+json' "$TEMPLATE_API" |
+    python3 -c '
+import json,sys
+try:
+    entries=json.load(sys.stdin)
+    if not isinstance(entries,list):
+        raise ValueError("GitHub 目录返回结果不是文件列表")
+    names=sorted(x["name"] for x in entries
+                 if x.get("type")=="file" and x.get("name","").lower().endswith((".yaml",".yml")))
+    if not names:
+        raise ValueError("config 目录没有 YAML 文件")
+    print("\n".join(names))
+except (ValueError,KeyError,TypeError) as e:
+    print("[ERROR] 获取 YAML 列表失败："+str(e),file=sys.stderr)
+    sys.exit(1)
+' > "$LIST_TMP" || fail '无法读取 GitHub config 目录的 YAML 列表'
+  mapfile -t YAML_FILES < "$LIST_TMP"
+  (("${#YAML_FILES[@]}" > 0)) || fail 'config 目录没有 YAML 文件'
+  printf '\n请选择需要下载的 YAML 配置：\n'
+  for i in "${!YAML_FILES[@]}"; do
+    printf '%d) %s\n' "$((i+1))" "${YAML_FILES[$i]}"
+  done
+  while :; do
+    read -r -p "请输入编号 [1-${#YAML_FILES[@]}]：" choice
+    if [[ "$choice" =~ ^[0-9]+$ ]] && (( 10#$choice >= 1 && 10#$choice <= ${#YAML_FILES[@]} )); then
+      SELECTED_YAML="${YAML_FILES[$((10#$choice-1))]}"
+      break
+    fi
+    info '无效编号，请重新选择。'
+  done
+  info "正在下载：$SELECTED_YAML"
+  curl -fsSL --retry 3 --connect-timeout 10 --max-time 60 \
+    "$TEMPLATE_BASE/$SELECTED_YAML" -o "$TEMPLATE_TMP" || fail 'GitHub YAML 模板下载失败'
+  [[ -s "$TEMPLATE_TMP" ]] || fail '下载的 YAML 文件为空'
   NODE_NAME="$SOFA_NODE_NAME" PROVIDER_URL="$PROVIDER_URL" TEMPLATE="$TEMPLATE_TMP" OUTPUT="$OUTPUT_TMP" python3 - <<'PY_TEMPLATE' || fail '生成 HTTPS YAML 失败'
 import os,pathlib
 s=pathlib.Path(os.environ['TEMPLATE']).read_text(encoding='utf-8')
@@ -171,7 +208,7 @@ PY_TEMPLATE
   chmod 600 "$OUTPUT_TMP"
   mv -f "$OUTPUT_TMP" "$CLASH_FILE"
   trap - EXIT
-  rm -f "$TEMPLATE_TMP"
+  rm -f "$LIST_TMP" "$TEMPLATE_TMP"
 else
   # 保留文件时也确保 Provider URL 与当前 HTTPS 域名、Token 一致。
   PROVIDER_URL="$PROVIDER_URL" CLASH_FILE="$CLASH_FILE" python3 - <<'PY_URL' || fail '现有 YAML 无法同步 HTTPS Provider URL'
