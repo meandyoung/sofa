@@ -31,7 +31,7 @@ if [[ "${SOFA_DOMAIN_CONFIRMED:-0}" == 1 ]]; then
   [[ -n "$DOMAIN" && "$DOMAIN" =~ ^([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$ ]] || fail '已确认的域名格式无效'
 else
   while :; do
-    if [[ -z "$DOMAIN" ]]; then read -r -p '请输入完整 HTTPS 订阅域名（***.sofa.superi.me）：' DOMAIN; fi
+    if [[ -z "$DOMAIN" ]]; then read -r -p '请输入完整 HTTPS 订阅域名：' DOMAIN; fi
     if [[ ! "$DOMAIN" =~ ^([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$ ]]; then
       info '域名格式不正确，请重新输入。'; DOMAIN=''; continue
     fi
