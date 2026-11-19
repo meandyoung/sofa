@@ -31,7 +31,7 @@ if [[ "${SOFA_DOMAIN_CONFIRMED:-0}" == 1 ]]; then
   [[ -n "$DOMAIN" && "$DOMAIN" =~ ^([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$ ]] || fail '已确认的域名格式无效'
 else
   while :; do
-    if [[ -z "$DOMAIN" ]]; then read -r -p '请输入完整 HTTPS 订阅域名：' DOMAIN; fi
+    if [[ -z "$DOMAIN" ]]; then read -r -p '请输入完整 HTTPS 订阅域名（***.sofa.superi.me）：' DOMAIN; fi
     if [[ ! "$DOMAIN" =~ ^([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$ ]]; then
       info '域名格式不正确，请重新输入。'; DOMAIN=''; continue
     fi
@@ -142,10 +142,10 @@ TOKEN=$(<"$TOKEN_FILE")
 GENERATE_CLASH=1
 if [[ -s "$CLASH_FILE" ]]; then
   while :; do
-    read -r -p '已有 clash-https.yaml，是否从 GitHub 更新？(yes/no)：' choice
+    read -r -p '已有 clash-https.yaml，是否从 GitHub 重新下载？(yes/no，默认 no)：' choice
     case "$choice" in
       yes) break ;;
-      no) GENERATE_CLASH=0; break ;;
+      no|'') GENERATE_CLASH=0; break ;;
       *) info '请输入 yes 或 no' ;;
     esac
   done
