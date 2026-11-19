@@ -360,8 +360,6 @@ PORT=$(sed -nE 's/^[[:space:]]*listen[[:space:]]+([0-9]+)[[:space:]]+ssl;.*/\1/p
 URL="https://${DOMAIN}:${PORT}/subscribe/${TOKEN}"
 printf '\n节点订阅地址：\n%s/proxies\n\n完整配置订阅地址：\n%s/clash\n' "$URL" "$URL"
 if command -v qrencode >/dev/null 2>&1; then
-  printf '\n节点订阅二维码：\n'
-  qrencode -t ANSIUTF8 "$URL/proxies"
   printf '\n完整配置订阅二维码：\n'
   qrencode -t ANSIUTF8 "$URL/clash"
 else
