@@ -340,6 +340,35 @@ if [[ "${SOFA_INSTALL_ALL:-0}" != 1 && -e /etc/nginx/conf.d/subscription.conf ]]
     esac
   done
 fi
+# 安装快捷命令：随时读取现有域名、端口和 Token，展示两种订阅链接及二维码。
+cat > /usr/local/bin/sofa <<'SOFA_CMD'
+#!/usr/bin/env bash
+set -euo pipefail
+DOMAIN_FILE=/etc/sing-box/https/domain
+TOKEN_FILE=/etc/sing-box/subscribe/token-https
+NGINX_CONF=/etc/sing-box/nginx/subscription-https.conf
+[[ -s "$DOMAIN_FILE" && -s "$TOKEN_FILE" && -r "$NGINX_CONF" ]] || {
+  echo '[ERROR] HTTPS 订阅尚未配置完成' >&2; exit 1;
+}
+DOMAIN=$(<"$DOMAIN_FILE")
+TOKEN=$(<"$TOKEN_FILE")
+[[ "$DOMAIN" =~ ^[a-zA-Z0-9.-]+$ && "$TOKEN" =~ ^[a-f0-9]{48}$ ]] || {
+  echo '[ERROR] HTTPS 域名或 Token 格式无效' >&2; exit 1;
+}
+PORT=$(sed -nE 's/^[[:space:]]*listen[[:space:]]+([0-9]+)[[:space:]]+ssl;.*/\1/p' "$NGINX_CONF" | head -1)
+[[ "$PORT" =~ ^[0-9]+$ ]] || { echo '[ERROR] 无法读取 HTTPS 端口' >&2; exit 1; }
+URL="https://${DOMAIN}:${PORT}/subscribe/${TOKEN}"
+printf '\n节点订阅地址：\n%s/proxies\n\n完整配置订阅地址：\n%s/clash\n' "$URL" "$URL"
+if command -v qrencode >/dev/null 2>&1; then
+  printf '\n节点订阅二维码：\n'
+  qrencode -t ANSIUTF8 "$URL/proxies"
+  printf '\n完整配置订阅二维码：\n'
+  qrencode -t ANSIUTF8 "$URL/clash"
+else
+  echo '[WARN] qrencode 未安装，无法显示二维码'
+fi
+SOFA_CMD
+chmod 755 /usr/local/bin/sofa
 if [[ "${SOFA_SUPPRESS_SUB_OUTPUT:-0}" != 1 ]]; then
   printf '\n节点订阅地址：\n%s/proxies\n\n完整配置订阅地址：\n%s/clash\n\n完整配置订阅二维码：\n' "$URL" "$URL"
   qrencode -t ANSIUTF8 "$URL/clash"
