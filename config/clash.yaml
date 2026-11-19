@@ -1,10 +1,11 @@
 # ============================================================
-# Version: 0.1
+# Version: 0.2
 # 此版本为单VPS模板
 # 面向 Clash Verge / Mihomo
 # 目前适配Mac版本
 # 需要安装脚本引导用户输入vps名称，用于provider名字，格式国家-vps运营商，比如：us-dmit
 # 订阅每小时更新
+# 简化fake-ip-filter规则，减少fake-ip-filter规则数量，提升fake-ip模式下的性能
 # ============================================================
 
 # ========== YAML 锚点 ==========
@@ -81,14 +82,14 @@ dns:
   fake-ip-range: 198.18.0.0/16
   fake-ip-filter-mode: blacklist
   fake-ip-filter:
-    - rule-set:private_domain
-    - rule-set:fakeipfilter_cn
-    - rule-set:fakeipfilter_!cn
+    - "+.lan"
+    - "+.local"
+    - "localhost"
+    - "localhost.*"
 
   default-nameserver:
     - 223.5.5.5
     - 119.28.28.28
-    - 1.1.1.1
   proxy-server-nameserver:
     - https://dns.alidns.com/dns-query
     - https://doh.pub/dns-query
@@ -96,17 +97,13 @@ dns:
     - https://dns.alidns.com/dns-query
     - https://doh.pub/dns-query
   nameserver:
-    - https://1.1.1.1/dns-query#节点选择
-    - https://8.8.8.8/dns-query#节点选择
+    - https://1.1.1.1/dns-query#自动选择
+    - https://8.8.8.8/dns-query#自动选择
 
   nameserver-policy:
-    "rule-set:cn_domain,private_domain,fakeipfilter_cn,steamcn_domain,microsoftcn_domain,applecn_domain":
+    "rule-set:cn_domain,private_domain,steamcn_domain,microsoftcn_domain,applecn_domain":
     - https://dns.alidns.com/dns-query
     - https://doh.pub/dns-query
-
-    "rule-set:fakeipfilter_!cn":
-    - https://1.1.1.1/dns-query#节点选择
-    - https://8.8.8.8/dns-query#节点选择
 
 # ========== proxy providers ==========
 proxy-providers:
@@ -147,13 +144,13 @@ rules:
 
   - RULE-SET,cn_domain,DIRECT
   - RULE-SET,cn_ip,DIRECT,no-resolve
+  - GEOSITE,cn,DIRECT
+  - GEOIP,CN,DIRECT,no-resolve
 
   - MATCH,节点选择
 
 # ========== rule-providers ==========
 rule-providers:
-  fakeipfilter_cn: {<<: *domain_text, url: "https://raw.githubusercontent.com/qichiyuhub/rule/refs/heads/main/rules/fakeipfilter-cn.list"}
-  fakeipfilter_!cn: {<<: *domain_text, url: "https://raw.githubusercontent.com/qichiyuhub/rule/refs/heads/main/rules/fakeipfilter-!cn.list"}
   private_domain: {<<: *domain, url: "https://github.com/MetaCubeX/meta-rules-dat/raw/refs/heads/meta/geo/geosite/private.mrs"}
  
   microsoftcn_domain: {<<: *domain, url: "https://github.com/MetaCubeX/meta-rules-dat/raw/refs/heads/meta/geo/geosite/microsoft@cn.mrs"}
