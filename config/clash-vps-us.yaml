@@ -1,0 +1,160 @@
+# ============================================================
+# Version: 0.2
+# 此版本为单VPS模板
+# 面向 Clash Verge / Mihomo
+# 目前适配Mac版本
+# 需要安装脚本引导用户输入vps名称，用于provider名字，格式国家-vps运营商，比如：us-dmit
+# 订阅每小时更新
+# 简化fake-ip-filter规则，减少fake-ip-filter规则数量，提升fake-ip模式下的性能
+# ============================================================
+
+# ========== YAML 锚点 ==========
+rule-anchor:
+  # 策略组
+  group_url: &group_url {type: url-test, url: "https://www.gstatic.com/generate_204", interval: 300, tolerance: 50, lazy: true, empty-fallback: REJECT}
+  group_fallback: &group_fallback {type: fallback, url: "https://www.gstatic.com/generate_204", interval: 300, lazy: true, empty-fallback: REJECT}
+
+  # 规则集
+  ip: &ip {type: http, interval: 86400, behavior: ipcidr, format: mrs}
+  domain: &domain {type: http, interval: 86400, behavior: domain, format: mrs}
+  domain_text: &domain_text {type: http, interval: 86400, behavior: domain, format: text}
+
+# ========== 基础设置 ==========
+mode: rule
+mixed-port: 7890
+ipv6: false
+
+allow-lan: false
+
+unified-delay: true
+tcp-concurrent: true
+log-level: info
+profile:
+  store-selected: true
+  store-fake-ip: true
+find-process-mode: strict
+
+# ========== TUN ==========
+tun:
+  enable: true
+  stack: mixed
+  dns-hijack: ["any:53", "tcp://any:53"]
+  auto-route: true
+  strict-route: false
+  auto-detect-interface: true
+
+# ========== sniffer ==========
+sniffer:
+  enable: true
+  override-destination: true
+  force-dns-mapping: false
+  parse-pure-ip: true
+  sniff:
+    HTTP:
+      ports: [80, 8080-8880]
+    TLS:
+      ports: [443, 8443]
+    QUIC:
+      ports: [443, 8443]
+  skip-domain:
+    - "Mijia Cloud"
+    - "dlg.io.mi.com"
+    - "+.push.apple.com"
+
+# ========== DNS ==========
+dns:
+  enable: true
+  cache-algorithm: arc
+  ipv6: false
+  
+  enhanced-mode: fake-ip
+  fake-ip-range: 198.18.0.0/16
+  fake-ip-filter-mode: blacklist
+  fake-ip-filter:
+    - "+.lan"
+    - "+.local"
+    - "localhost"
+    - "localhost.*"
+
+  default-nameserver:
+    - 223.5.5.5
+    - 119.28.28.28
+  proxy-server-nameserver:
+    - https://dns.alidns.com/dns-query
+    - https://doh.pub/dns-query
+  direct-nameserver:
+    - https://dns.alidns.com/dns-query
+    - https://doh.pub/dns-query
+  nameserver:
+    - https://1.1.1.1/dns-query#自动选择
+    - https://8.8.8.8/dns-query#自动选择
+
+  nameserver-policy:
+    "rule-set:cn_domain,private_domain,steamcn_domain,microsoftcn_domain,applecn_domain":
+    - https://dns.alidns.com/dns-query
+    - https://doh.pub/dns-query
+
+# ========== proxy providers ==========
+proxy-providers:
+  NODE_NAME:
+    type: http
+    url: "PROXY_PROVIDERS_URL"
+    proxy: DIRECT
+    interval: 86400
+    path: ./proxy_providers/NODE_NAME.yaml
+    health-check:
+      enable: true
+      url: https://www.gstatic.com/generate_204
+      interval: 300
+
+
+# ========== proxies ==========
+proxies:
+
+# ========== proxy-groups ==========
+proxy-groups:
+  - name: 节点选择
+    type: select
+    proxies:
+      - 自动选择
+    use:
+      - NODE_NAME
+      
+  - name: 自动选择
+    <<: *group_url
+    use:
+      - NODE_NAME
+
+  - name: DirectConnect
+    type: select
+    proxies:
+      - DIRECT
+
+# ========== rules ==========
+rules:
+  # 直连
+  - RULE-SET,private_domain,DIRECT
+  - RULE-SET,private_ip,DIRECT,no-resolve
+  - RULE-SET,cn_domain,DIRECT
+  - RULE-SET,cn_ip,DIRECT,no-resolve
+  - GEOSITE,cn,DIRECT
+  - GEOIP,CN,DIRECT,no-resolve
+  - RULE-SET,microsoftcn_domain,DIRECT
+  - RULE-SET,applecn_domain,DIRECT
+  - RULE-SET,steamcn_domain,DIRECT
+  
+  # 代理
+  - MATCH,节点选择
+
+# ========== rule-providers ==========
+rule-providers:
+  private_domain: {<<: *domain, url: "https://github.com/MetaCubeX/meta-rules-dat/raw/refs/heads/meta/geo/geosite/private.mrs"}
+  private_ip: {<<: *ip, url: "https://github.com/MetaCubeX/meta-rules-dat/raw/refs/heads/meta/geo/geoip/private.mrs"}
+ 
+  microsoftcn_domain: {<<: *domain, url: "https://github.com/MetaCubeX/meta-rules-dat/raw/refs/heads/meta/geo/geosite/microsoft@cn.mrs"}
+  applecn_domain: {<<: *domain, url: "https://github.com/MetaCubeX/meta-rules-dat/raw/refs/heads/meta/geo/geosite/apple@cn.mrs"}
+  steamcn_domain: {<<: *domain, url: "https://github.com/MetaCubeX/meta-rules-dat/raw/refs/heads/meta/geo/geosite/steam@cn.mrs"}
+
+  cn_domain: {<<: *domain, url: "https://github.com/MetaCubeX/meta-rules-dat/raw/refs/heads/meta/geo/geosite/cn.mrs"}
+  cn_ip: {<<: *ip, url: "https://github.com/MetaCubeX/meta-rules-dat/raw/refs/heads/meta/geo/geoip/cn.mrs"}
+  
