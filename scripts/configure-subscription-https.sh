@@ -18,13 +18,81 @@ ACTION="${1:-install}"
 DOMAIN="${2:-${SOFA_SUB_DOMAIN:-}}"
 fail(){ echo "[ERROR] $*" >&2; exit 1; }
 info(){ echo "[INFO] $*"; }
+# Reuse one verified Nginx instance. The same functions are embedded in the renewal hook.
+nginx_context(){
+  local result tmp
+  tmp=$(mktemp)
+  if ! python3 - "${1:-running}" > "$tmp" <<'PY_NGINX'
+import os,pathlib,re,shlex,shutil,subprocess,sys
+allow_stopped=sys.argv[1]=='install'
+masters=[]
+for p in pathlib.Path('/proc').iterdir():
+    if not p.name.isdigit(): continue
+    try:
+        cmd=(p/'cmdline').read_bytes().replace(b'\0',b' ').decode()
+        if cmd.startswith('nginx: master process '): masters.append((p,cmd))
+    except (OSError,UnicodeError): pass
+if len(masters)>1: raise SystemExit('检测到多个 Nginx master；请先解决实例/PID 冲突')
+unit=subprocess.run(['systemctl','cat','sing-box.service'],capture_output=True,text=True).stdout
+fscarmen_expected=bool(re.search(r'nginx\s+-c\s+/etc/sing-box/nginx\.conf',unit))
+if masters:
+    p,cmd=masters[0]; binary=os.path.realpath(p/'exe'); pid=p.name
+    args=shlex.split(cmd[len('nginx: master process '):])
+    if ' -g ' in cmd:
+        glob=cmd.split(' -g ',1)[1].strip().strip('"\'')
+        if re.sub(r'(?:daemon|master_process)\s+on\s*;','',glob).strip():
+            raise SystemExit('Nginx 使用非标准全局启动参数，拒绝自动管理')
+else:
+    if not allow_stopped: raise SystemExit('原 Nginx 未运行，拒绝通过续期/重载操作启动服务')
+    if fscarmen_expected or pathlib.Path('/etc/sing-box/nginx.conf').exists():
+        raise SystemExit('fscarmen Nginx 未运行；请先恢复原部署，不会启动系统 Nginx')
+    binary=shutil.which('nginx'); pid=''; args=[]
+    if not binary:
+        print('NGINX_MODE=missing'); raise SystemExit(0)
+v=subprocess.run([binary,'-V'],capture_output=True,text=True,check=True).stderr
+opts=dict(re.findall(r'--(prefix|conf-path|pid-path|user)=([^\s]+)',v))
+def option(flag,default): return args[args.index(flag)+1] if flag in args else default
+prefix=os.path.abspath(option('-p',opts.get('prefix','/usr/share/nginx')))
+conf=os.path.normpath(os.path.join(prefix,option('-c',opts.get('conf-path','/etc/nginx/nginx.conf'))))
+mode='system'
+if pid:
+    cgroup=(p/'cgroup').read_text()
+    main=subprocess.run(['systemctl','show','nginx.service','-p','MainPID','--value'],capture_output=True,text=True).stdout.strip()
+    if conf=='/etc/sing-box/nginx.conf' and 'sing-box.service' in cgroup: mode='fscarmen'
+    elif main!=pid or 'nginx.service' not in cgroup: raise SystemExit('无法确认 Nginx 的服务归属，拒绝接管')
+    if fscarmen_expected and mode!='fscarmen': raise SystemExit('sing-box 要求 fscarmen Nginx，但实际实例不匹配；请先恢复原部署')
+test=subprocess.run([binary,'-p',prefix,'-c',conf,'-T'],capture_output=True,text=True)
+if test.returncode: raise SystemExit('原 Nginx 配置检查失败：'+test.stderr)
+text=test.stdout
+m=re.search(r'^\s*pid\s+([^;\s]+)\s*;',text,re.M)
+pidfile=os.path.join(prefix,m.group(1) if m else opts.get('pid-path','/run/nginx.pid'))
+if pid and pathlib.Path(pidfile).read_text().strip()!=pid: raise SystemExit('PID 文件与实际 Nginx master 不一致')
+m=re.search(r'^\s*user\s+([^;\s]+)',text,re.M)
+worker=m.group(1) if m else opts.get('user','nobody')
+values=dict(NGINX_BIN=binary,NGINX_CONF=conf,NGINX_PREFIX=prefix,NGINX_PID=pid,NGINX_MODE=mode,NGINX_WORKER=worker)
+print('\n'.join(k+'='+shlex.quote(v) for k,v in values.items()))
+PY_NGINX
+  then rm -f "$tmp"; return 1; fi
+  result=$(cat "$tmp"); rm -f "$tmp"
+  eval "$result" # Only quoted local process/config metadata from the Python code above.
+}
+nginx_test(){ "$NGINX_BIN" -p "$NGINX_PREFIX" -c "$NGINX_CONF" -t; }
+nginx_reload(){
+  local expected="$NGINX_BIN|$NGINX_CONF|$NGINX_PREFIX"
+  nginx_context || return 1
+  [[ "$expected" == "$NGINX_BIN|$NGINX_CONF|$NGINX_PREFIX" ]] || return 1
+  nginx_test || return 1
+  kill -HUP "$NGINX_PID" # Signal the verified master, not an ambiguous shared PID file.
+}
 [[ $EUID -eq 0 ]] || fail '需要 root 权限'
 [[ "$ACTION" == preflight || "$ACTION" == install ]] || fail '用法：configure-subscription-https.sh [preflight|install] [完整域名]'
 install -d -m 700 "$HTTPS_DIR"
 install -d -m 755 "$NGINX_DIR" "$SCRIPT_DIR"
-if ! command -v curl >/dev/null || ! command -v python3 >/dev/null; then
+missing=()
+for cmd in curl python3 openssl; do command -v "$cmd" >/dev/null || missing+=("$cmd"); done
+if (( ${#missing[@]} )); then
   apt-get -o DPkg::Lock::Timeout=600 update -qq
-  DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=600 install -y curl python3 ca-certificates
+  DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=600 install --no-upgrade -y "${missing[@]}" ca-certificates
 fi
 # 独立运行时询问域名；主安装器传入域名时不重复询问。
 if [[ -z "$DOMAIN" && -s "$DOMAIN_FILE" ]]; then DOMAIN=$(<"$DOMAIN_FILE"); fi
@@ -87,6 +155,33 @@ if [[ "$ACTION" == preflight ]]; then
   chmod 600 "$DOMAIN_FILE"
   exit 0
 fi
+# Detect before installing: a custom running binary may not be on PATH.
+nginx_context install || fail '无法安全识别 Nginx，请先检查原部署'
+missing=()
+[[ "$NGINX_MODE" != missing ]] || missing+=(nginx)
+for item in certbot:certbot qrencode:qrencode acl:setfacl iproute2:ss; do
+  pkg=${item%%:*}; cmd=${item#*:}
+  command -v "$cmd" >/dev/null || missing+=("$pkg")
+done
+if command -v certbot >/dev/null; then
+  certbot --version >/dev/null 2>&1 || fail '现有 Certbot 不可用，请按原安装方式修复'
+  if ! certbot plugins 2>/dev/null | grep -q dns-cloudflare; then
+    # An apt plugin cannot extend a snap/venv Certbot installation.
+    if dpkg-query -S "$(readlink -f "$(command -v certbot)")" 2>/dev/null | grep -q '^certbot:'; then
+      missing+=(python3-certbot-dns-cloudflare)
+    else fail '现有 Certbot 缺少 Cloudflare 插件，请按其原安装来源补齐插件'; fi
+  fi
+else missing+=(python3-certbot-dns-cloudflare); fi
+if (( ${#missing[@]} )); then
+  apt-get -o DPkg::Lock::Timeout=600 update -qq
+  DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=600 install --no-upgrade -y "${missing[@]}"
+fi
+# Package scripts must not silently change which Nginx we will manage.
+NGINX_EXPECTED="${NGINX_BIN:-}|${NGINX_CONF:-}|${NGINX_PREFIX:-}"
+WAS_MISSING=$NGINX_MODE
+nginx_context install || fail '安装依赖后 Nginx 状态异常'
+[[ "$WAS_MISSING" == missing || "$NGINX_EXPECTED" == "$NGINX_BIN|$NGINX_CONF|$NGINX_PREFIX" ]] || fail '安装依赖后 Nginx 实例发生变化'
+certbot plugins 2>/dev/null | grep -q dns-cloudflare || fail 'Certbot Cloudflare 插件不可用'
 # 独立 HTTPS 订阅：不依赖任何节点安装器。
 install -d -m 750 "$SUB_DIR"
 PROXIES_FILE="$SUB_DIR/proxies"
@@ -225,19 +320,10 @@ if updated!=s:
 PY_URL
 fi
 PUBLIC_IP=$(curl -fsS --max-time 10 -4 https://api.ipify.org) || fail '无法获取 VPS 公网 IP'
-export DEBIAN_FRONTEND=noninteractive
-missing=()
-for pkg in nginx certbot python3-certbot-dns-cloudflare ufw qrencode acl; do
-  dpkg-query -W -f='${Status}' "$pkg" 2>/dev/null | grep -qx 'install ok installed' || missing+=("$pkg")
-done
-if (( ${#missing[@]} )); then
-  apt-get -o DPkg::Lock::Timeout=600 update -qq
-  apt-get -o DPkg::Lock::Timeout=600 install -y "${missing[@]}"
-fi
 # Nginx 需要能够读取目录和订阅文件；不修改原节点文件权限。
-if command -v setfacl >/dev/null; then
-  setfacl -m u:www-data:--x "$BASE" "$SUB_DIR"
-  setfacl -m u:www-data:r-- "$PROXIES_FILE" "$CLASH_FILE"
+if [[ "$NGINX_WORKER" != root ]] && command -v setfacl >/dev/null; then
+  setfacl -m "u:$NGINX_WORKER:--x" "$BASE" "$SUB_DIR"
+  setfacl -m "u:$NGINX_WORKER:r--" "$PROXIES_FILE" "$CLASH_FILE"
 fi
 # DNS 冲突检查：只创建不存在的 A 记录，不覆盖其他 VPS 的记录。
 CF_TOKEN=$(sed -n 's/^dns_cloudflare_api_token = //p' "$CREDENTIALS" | head -1)
@@ -276,6 +362,38 @@ if [[ ! -s "$CERT" || ! -s "$KEY" ]] || ! openssl x509 -checkend 2592000 -noout 
     --dns-cloudflare --dns-cloudflare-credentials "$CREDENTIALS" \
     --dns-cloudflare-propagation-seconds 60 -d "$DOMAIN" || fail '证书申请失败；原有 HTTP 保持不变'
 fi
+# Allow sharing an existing Nginx listener, but never take another program's port.
+if ss -H -lntp | awk -v port=":$PORT" -v pid="pid=$NGINX_PID," '
+  $4 ~ port"$" && (pid=="pid=," || index($0,pid)==0) {conflict=1}
+  END {exit !conflict}'; then fail "HTTPS 端口 $PORT 已被其他进程占用"; fi
+# Back up only the Nginx files this module changes; leave other business state alone.
+NGINX_BACKUP=$(mktemp -d)
+NGINX_CHANGED=0; NGINX_COMMITTED=0; NGINX_STARTED=0
+NGINX_LINK=/etc/nginx/conf.d/subscription-https.conf
+[[ ! -L "$NGINX_DIR/subscription-https.conf" ]] || fail 'HTTPS server 配置不能是符号链接'
+NGINX_FILES=("$(readlink -f "$NGINX_CONF")" "$NGINX_DIR/subscription-https.conf")
+[[ "$NGINX_MODE" != system ]] || NGINX_FILES+=("$NGINX_LINK")
+for i in "${!NGINX_FILES[@]}"; do
+  path=${NGINX_FILES[$i]}
+  if [[ -e "$path" || -L "$path" ]]; then cp -a "$path" "$NGINX_BACKUP/$i"; fi
+done
+nginx_cleanup(){
+  local rc=$? i
+  trap - EXIT
+  set +e
+  if [[ "$NGINX_COMMITTED" == 0 && "$NGINX_CHANGED" == 1 ]]; then
+    for i in "${!NGINX_FILES[@]}"; do
+      rm -f "${NGINX_FILES[$i]}"
+      [[ ! -e "$NGINX_BACKUP/$i" && ! -L "$NGINX_BACKUP/$i" ]] || cp -a "$NGINX_BACKUP/$i" "${NGINX_FILES[$i]}"
+    done
+    if [[ "$NGINX_STARTED" == 1 ]]; then systemctl stop nginx || true
+    elif [[ -n "$NGINX_PID" ]]; then nginx_reload || echo '[WARN] 配置已恢复，请人工核对 Nginx 状态' >&2; fi
+  fi
+  rm -rf "$NGINX_BACKUP"
+  exit "$rc"
+}
+trap nginx_cleanup EXIT
+NGINX_CHANGED=1
 cat > "$NGINX_DIR/subscription-https.conf" <<CONF
 server {
     listen ${PORT} ssl;
@@ -297,42 +415,93 @@ server {
 }
 CONF
 chmod 644 "$NGINX_DIR/subscription-https.conf"
-ln -sfn "$NGINX_DIR/subscription-https.conf" /etc/nginx/conf.d/subscription-https.conf
-nginx -t || fail 'Nginx HTTPS 配置检查失败'
-systemctl enable --now nginx
-systemctl reload nginx
-# 续期成功后安全重新加载 Nginx。
-cat > "$SCRIPT_DIR/reload-nginx-cert.sh" <<'HOOK'
-#!/usr/bin/env bash
-set -e
-nginx -t
-systemctl reload nginx
+if [[ "$NGINX_MODE" == system ]]; then
+  [[ ! -e "$NGINX_LINK" && ! -L "$NGINX_LINK" ]] ||
+    [[ -L "$NGINX_LINK" && $(readlink -f "$NGINX_LINK") == "$NGINX_DIR/subscription-https.conf" ]] || fail 'HTTPS 配置链接由其他部署占用'
+  ln -sfn "$NGINX_DIR/subscription-https.conf" "$NGINX_LINK"
+fi
+# If conf.d is not loaded (including fscarmen), add one include inside the actual http block.
+"$NGINX_BIN" -p "$NGINX_PREFIX" -c "$NGINX_CONF" -T > "$NGINX_BACKUP/expanded" 2> "$NGINX_BACKUP/test.log" || fail 'Nginx HTTPS 配置检查失败'
+NGINX_INCLUDED=0
+if grep -Fqx "# configuration file $NGINX_DIR/subscription-https.conf:" "$NGINX_BACKUP/expanded"; then NGINX_INCLUDED=1; fi
+# nginx -T reports the include's symlink path, not necessarily its resolved target.
+if [[ "$NGINX_MODE" == system ]] && grep -Fqx "# configuration file $NGINX_LINK:" "$NGINX_BACKUP/expanded"; then NGINX_INCLUDED=1; fi
+if [[ "$NGINX_INCLUDED" == 0 ]]; then
+  python3 - "$NGINX_CONF" "$NGINX_DIR/subscription-https.conf" <<'PY_INCLUDE'
+import pathlib,re,sys
+p=pathlib.Path(sys.argv[1]); s=p.read_text(); target=sys.argv[2]
+tokens=re.finditer(r'#[^\n]*|"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'|[{};]|[^\s{};#]+',s)
+stack=[]; stmt=[]; positions=[]
+for m in tokens:
+    t=m.group()
+    if t.startswith('#'): continue
+    if t=='{':
+        name=stmt[0] if stmt else ''
+        if not stack and name=='http': positions.append(m.end())
+        stack.append(name); stmt=[]
+    elif t=='}':
+        if not stack: raise SystemExit('主配置括号不匹配')
+        stack.pop(); stmt=[]
+    elif t==';': stmt=[]
+    else: stmt.append(t)
+if stack or len(positions)!=1: raise SystemExit('无法唯一识别 http 块，拒绝修改主配置')
+pos=positions[0]
+p.write_text(s[:pos]+'\n    include '+target+'; # Sofa HTTPS\n'+s[pos:])
+PY_INCLUDE
+fi
+nginx_test || fail 'Nginx HTTPS 配置检查失败'
+if [[ -n "$NGINX_PID" ]]; then nginx_reload || fail 'Nginx reload 失败'
+else
+  NGINX_STARTED=1
+  systemctl start nginx || fail 'Nginx 启动失败'
+  nginx_context || fail '无法确认新启动的 Nginx 实例'
+fi
+# Renewal reuses the same detection/test/reload logic; unrelated lineages do nothing.
+{
+  printf '#!/usr/bin/env bash\nset -Eeuo pipefail\n'
+  printf 'EXPECTED=%q\nLINEAGE=%q\n' "$NGINX_BIN|$NGINX_CONF|$NGINX_PREFIX" "$(dirname "$CERT")"
+  declare -f nginx_context nginx_test nginx_reload
+  cat <<'HOOK'
+[[ "${RENEWED_LINEAGE:-}" == "$LINEAGE" ]] || exit 0
+nginx_context
+[[ "$EXPECTED" == "$NGINX_BIN|$NGINX_CONF|$NGINX_PREFIX" ]] || exit 1
+nginx_reload
 HOOK
+} > "$SCRIPT_DIR/reload-nginx-cert.sh"
 chmod 755 "$SCRIPT_DIR/reload-nginx-cert.sh"
 install -d -m 755 /etc/letsencrypt/renewal-hooks/deploy
 ln -sfn "$SCRIPT_DIR/reload-nginx-cert.sh" /etc/letsencrypt/renewal-hooks/deploy/reload-nginx-cert.sh
-systemctl enable --now certbot.timer
-ufw allow "${PORT}/tcp" comment 'Sofa HTTPS Subscription'
+# Reuse snap/apt/cron renewal scheduling instead of unconditionally enabling an apt timer.
+if ! systemctl list-timers --all --no-legend | grep -Eq 'certbot|snap.certbot' && ! grep -Rqs certbot /etc/cron.d /etc/cron.daily 2>/dev/null; then
+  if systemctl cat certbot.timer >/dev/null 2>&1; then systemctl enable --now certbot.timer
+  else info '未检测到证书续期任务，请按现有 Certbot 安装方式配置自动续期'; fi
+fi
+if command -v ufw >/dev/null; then ufw allow "${PORT}/tcp" comment 'Sofa HTTPS Subscription'
+else info "请使用现有防火墙放行 TCP $PORT"; fi
 # 使用实际域名验证 TLS 证书及订阅响应。
 URL="https://${DOMAIN}:${PORT}/subscribe/${TOKEN}"
 [[ $(curl -fsS -o /dev/null -w '%{http_code}' --connect-timeout 10 "$URL/proxies") == 200 ]] || fail 'HTTPS 节点订阅验证失败；不关闭 HTTP'
 [[ $(curl -fsS -o /dev/null -w '%{http_code}' --connect-timeout 10 "$URL/clash") == 200 ]] || fail 'HTTPS 完整订阅验证失败；不关闭 HTTP'
 printf '%s\n' "$DOMAIN" > "$DOMAIN_FILE"
 chmod 600 "$DOMAIN_FILE"
+NGINX_COMMITTED=1
+if [[ "$NGINX_MODE" == fscarmen ]]; then info '上游重写 nginx.conf 后需手动重跑本脚本恢复 HTTPS 引用'; fi
 # 只有独立运行且原有 HTTP 入口存在时才询问是否关闭。
-if [[ "${SOFA_INSTALL_ALL:-0}" != 1 && -e /etc/nginx/conf.d/subscription.conf ]]; then
+if [[ "${SOFA_INSTALL_ALL:-0}" != 1 && "$NGINX_MODE" == system && -L /etc/nginx/conf.d/subscription.conf &&
+      $(readlink -f /etc/nginx/conf.d/subscription.conf) == "$NGINX_DIR/subscription.conf" ]] &&
+   grep -Fq "alias ${SUB_DIR}/proxies;" "$NGINX_DIR/subscription.conf"; then
   while :; do
     read -r -p 'HTTPS 已验证成功。是否取消原有 HTTP 订阅？(yes/no)：' choice
     case "$choice" in
       yes)
         mv /etc/nginx/conf.d/subscription.conf "$NGINX_DIR/subscription-http.disabled"
-        if nginx -t; then
-          systemctl reload nginx
-          ufw delete allow "${HTTP_PORT}/tcp" || true
+        if nginx_test && nginx_reload; then
+          if command -v ufw >/dev/null; then ufw delete allow "${HTTP_PORT}/tcp" || true; fi
           info 'HTTP 订阅已关闭'
         else
           mv "$NGINX_DIR/subscription-http.disabled" /etc/nginx/conf.d/subscription.conf
-          fail 'Nginx 检查失败，已恢复 HTTP'
+          nginx_reload || true
+          fail 'Nginx 检查或 reload 失败，已恢复 HTTP'
         fi
         break ;;
       no) info '保留 HTTP 订阅'; break ;;
